@@ -64,7 +64,7 @@ function cardList(items) {
     .map(
       (item) => `
       <article class="card" data-id="${item.id}">
-        <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">${item.action_type || "acknowledge"}</span></div>
+        <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">${item.investigation_status === "running" ? "investigating" : (item.action_type || "acknowledge")}</span></div>
         <h2>${item.alertname || "alert"}</h2>
         <p class="muted">${item.namespace || "-"}</p>
         <p>${item.summary || ""}</p>
@@ -85,9 +85,13 @@ function detailView(item) {
   const target = rec.target || {};
   const steps = rec.how_to_resolve || [];
   const gitops = rec.gitops || {};
+  const investigating = rec.investigation_status === "running";
+  const findings = rec.investigation || "";
   const stepHtml = steps.length
     ? `<ol class="steps">${steps.map((s) => `<li>${s}</li>`).join("")}</ol>`
-    : `<p class="muted">No step list yet. Tap Ask Grok again to refresh the recommendation.</p>`;
+    : investigating
+      ? `<p class="muted">Waiting for the read-only investigation to finish.</p>`
+      : `<p class="muted">No step list yet. Tap Ask Grok again to refresh the recommendation.</p>`;
   const targetTxt = [target.kind, target.namespace && target.name ? `${target.namespace}/${target.name}` : target.name, target.replicas != null ? `replicas=${target.replicas}` : ""]
     .filter(Boolean)
     .join(" ");
@@ -103,7 +107,8 @@ function detailView(item) {
       <p class="eyebrow">Grok recommendation</p>
       <p><strong>${rec.summary || "No summary"}</strong></p>
       <p>${rec.root_cause || ""}</p>
-      <p class="eyebrow" style="margin-top:16px">How to resolve</p>
+      ${findings ? `<p class="eyebrow" style="margin-top:16px">Investigation</p><pre class="findings">${findings}</pre>` : ""}
+      <p class="eyebrow" style="margin-top:16px">Permanent corrective actions</p>
       ${stepHtml}
     </section>
     <section class="card">
@@ -140,6 +145,11 @@ function detailView(item) {
     document.getElementById("rejectBtn").onclick = run(`/api/v1/incidents/${item.id}/reject`);
     document.getElementById("ackBtn").onclick = run(`/api/v1/incidents/${item.id}/acknowledge`);
     document.getElementById("reanalyzeBtn").onclick = run(`/api/v1/incidents/${item.id}/reanalyze`);
+  }
+  if (investigating) {
+    window.setTimeout(() => {
+      if (selectedId === item.id) render();
+    }, 3000);
   }
 }
 

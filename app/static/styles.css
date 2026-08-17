@@ -101,3 +101,13 @@ a { color: var(--text); }
   margin: 0 0 8px;
   line-height: 1.4;
 }
+.findings {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+  background: #111;
+  border-radius: 10px;
+  padding: 12px;
+  overflow-x: auto;
+}

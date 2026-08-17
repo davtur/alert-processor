@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -72,6 +73,20 @@ class GrokNormalizeTests(unittest.TestCase):
         )
         self.assertEqual(rec["how_to_resolve"], ["check operator logs", "inspect DaemonSet"])
         self.assertIn("does not change the cluster", grok.approval_effect(rec))
+
+
+class InvestigateToolTests(unittest.TestCase):
+    def test_unknown_tool(self):
+        from app.investigate import run_tool
+
+        out = json.loads(run_tool("rm", {}))
+        self.assertIn("unknown tool", out["error"])
+
+    def test_invalid_namespace(self):
+        from app.investigate import run_tool
+
+        out = json.loads(run_tool("list_workloads", {"namespace": "Not Valid"}))
+        self.assertIn("error", out)
 
 
 if __name__ == "__main__":

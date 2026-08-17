@@ -81,6 +81,224 @@ def cluster_context(namespace: str) -> str:
         return ""
 
 
+def _container_state(status) -> dict[str, Any]:
+    if not status:
+        return {}
+    state = status.state
+    info: dict[str, Any] = {
+        "name": status.name,
+        "ready": status.ready,
+        "restarts": status.restart_count,
+        "image": status.image,
+    }
+    if state.waiting:
+        info["waiting"] = state.waiting.reason
+        info["waiting_message"] = (state.waiting.message or "")[:300]
+    if state.terminated:
+        info["terminated"] = state.terminated.reason
+        info["exit_code"] = state.terminated.exit_code
+    if status.last_state and status.last_state.terminated:
+        info["last_terminated"] = status.last_state.terminated.reason
+        info["last_exit_code"] = status.last_state.terminated.exit_code
+    return info
+
+
+def inspect_workloads(namespace: str) -> dict[str, Any]:
+    if not valid_name(namespace):
+        raise ActionError("invalid namespace")
+    client = _client()
+    apps = client.AppsV1Api()
+    core = client.CoreV1Api()
+    deployments = apps.list_namespaced_deployment(namespace, limit=30)
+    daemonsets = apps.list_namespaced_daemon_set(namespace, limit=20)
+    statefulsets = apps.list_namespaced_stateful_set(namespace, limit=20)
+    pods = core.list_namespaced_pod(namespace, limit=40)
+    return {
+        "namespace": namespace,
+        "deployments": [
+            {
+                "name": d.metadata.name,
+                "replicas": d.spec.replicas,
+                "ready": d.status.ready_replicas,
+                "unavailable": d.status.unavailable_replicas,
+            }
+            for d in deployments.items
+        ],
+        "daemonsets": [
+            {
+                "name": d.metadata.name,
+                "desired": d.status.desired_number_scheduled,
+                "ready": d.status.number_ready,
+                "unavailable": d.status.number_unavailable,
+            }
+            for d in daemonsets.items
+        ],
+        "statefulsets": [
+            {
+                "name": s.metadata.name,
+                "replicas": s.spec.replicas,
+                "ready": s.status.ready_replicas,
+            }
+            for s in statefulsets.items
+        ],
+        "pods": [
+            {
+                "name": p.metadata.name,
+                "phase": p.status.phase,
+                "node": p.spec.node_name,
+                "containers": [_container_state(c) for c in (p.status.container_statuses or [])],
+            }
+            for p in pods.items
+        ],
+    }
+
+
+def inspect_pod(namespace: str, name: str) -> dict[str, Any]:
+    if not valid_name(namespace) or not valid_name(name):
+        raise ActionError("invalid namespace or name")
+    client = _client()
+    core = client.CoreV1Api()
+    p = core.read_namespaced_pod(name, namespace)
+    owners = [
+        {"kind": o.kind, "name": o.name}
+        for o in (p.metadata.owner_references or [])
+    ]
+    return {
+        "name": p.metadata.name,
+        "namespace": p.metadata.namespace,
+        "phase": p.status.phase,
+        "node": p.spec.node_name,
+        "owners": owners,
+        "qos": p.status.qos_class,
+        "containers": [_container_state(c) for c in (p.status.container_statuses or [])],
+        "conditions": [
+            {"type": c.type, "status": c.status, "reason": c.reason, "message": (c.message or "")[:200]}
+            for c in (p.status.conditions or [])
+        ],
+    }
+
+
+def inspect_logs(namespace: str, name: str, container: str = "", previous: bool = False) -> dict[str, Any]:
+    if not valid_name(namespace) or not valid_name(name):
+        raise ActionError("invalid namespace or name")
+    if container and not valid_name(container):
+        raise ActionError("invalid container name")
+    client = _client()
+    core = client.CoreV1Api()
+    kwargs: dict[str, Any] = {
+        "tail_lines": config.LOG_TAIL_LINES,
+        "timestamps": True,
+        "previous": previous,
+    }
+    if container:
+        kwargs["container"] = container
+    text = core.read_namespaced_pod_log(name, namespace, **kwargs)
+    return {
+        "namespace": namespace,
+        "pod": name,
+        "container": container or None,
+        "previous": previous,
+        "log": (text or "")[-config.TOOL_RESULT_MAX_CHARS :],
+    }
+
+
+def inspect_events(namespace: str, name: str = "") -> dict[str, Any]:
+    if not valid_name(namespace):
+        raise ActionError("invalid namespace")
+    if name and not valid_name(name):
+        raise ActionError("invalid name")
+    client = _client()
+    core = client.CoreV1Api()
+    field_selector = f"involvedObject.name={name}" if name else None
+    events = core.list_namespaced_event(namespace, field_selector=field_selector, limit=30)
+    items = []
+    for e in events.items:
+        items.append(
+            {
+                "type": e.type,
+                "reason": e.reason,
+                "object": f"{getattr(e.involved_object, 'kind', '')}/{getattr(e.involved_object, 'name', '')}",
+                "message": (e.message or "")[:300],
+                "count": e.count,
+                "last": str(e.last_timestamp or e.event_time or ""),
+            }
+        )
+    return {"namespace": namespace, "events": items[:25]}
+
+
+def inspect_workload(namespace: str, kind: str, name: str) -> dict[str, Any]:
+    if not valid_name(namespace) or not valid_name(name):
+        raise ActionError("invalid namespace or name")
+    kind_l = kind.lower()
+    client = _client()
+    apps = client.AppsV1Api()
+    if kind_l == "deployment":
+        obj = apps.read_namespaced_deployment(name, namespace)
+        spec_replicas = obj.spec.replicas
+        ready = obj.status.ready_replicas
+        images = [c.image for c in obj.spec.template.spec.containers]
+        conditions = [
+            {"type": c.type, "status": c.status, "reason": c.reason, "message": (c.message or "")[:200]}
+            for c in (obj.status.conditions or [])
+        ]
+    elif kind_l == "daemonset":
+        obj = apps.read_namespaced_daemon_set(name, namespace)
+        spec_replicas = obj.status.desired_number_scheduled
+        ready = obj.status.number_ready
+        images = [c.image for c in obj.spec.template.spec.containers]
+        conditions = [
+            {"type": c.type, "status": c.status, "reason": c.reason, "message": (c.message or "")[:200]}
+            for c in (obj.status.conditions or [])
+        ]
+    elif kind_l == "statefulset":
+        obj = apps.read_namespaced_stateful_set(name, namespace)
+        spec_replicas = obj.spec.replicas
+        ready = obj.status.ready_replicas
+        images = [c.image for c in obj.spec.template.spec.containers]
+        conditions = [
+            {"type": c.type, "status": c.status, "reason": c.reason, "message": (c.message or "")[:200]}
+            for c in (obj.status.conditions or [])
+        ]
+    else:
+        raise ActionError("kind must be Deployment, DaemonSet, or StatefulSet")
+    return {
+        "kind": kind,
+        "namespace": namespace,
+        "name": name,
+        "replicas": spec_replicas,
+        "ready": ready,
+        "images": images,
+        "conditions": conditions,
+    }
+
+
+def inspect_nodes() -> dict[str, Any]:
+    client = _client()
+    core = client.CoreV1Api()
+    nodes = core.list_node()
+    items = []
+    for n in nodes.items:
+        ready = "Unknown"
+        for c in n.status.conditions or []:
+            if c.type == "Ready":
+                ready = c.status
+        gpu = (n.status.capacity or {}).get("nvidia.com/gpu")
+        items.append(
+            {
+                "name": n.metadata.name,
+                "ready": ready,
+                "unschedulable": bool(n.spec.unschedulable),
+                "gpu": gpu,
+                "roles": ",".join(
+                    k.replace("node-role.kubernetes.io/", "")
+                    for k in (n.metadata.labels or {})
+                    if k.startswith("node-role.kubernetes.io/")
+                ),
+            }
+        )
+    return {"nodes": items}
+
+
 def restart_deployment(namespace: str, name: str) -> str:
     client = _client()
     apps = client.AppsV1Api()

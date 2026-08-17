@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,10 @@ from app import config, db, github_pr, grok, k8s, mailer, tokens
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("alert-processor")
-
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SESSION_COOKIE = "ap_session"
+_analyze_lock = threading.Lock()
+_analyzing: set[int] = set()
 
 
 @asynccontextmanager
@@ -120,23 +122,52 @@ def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "resolved", "id": incident["id"]}
 
     if incident.get("recommendation") and _cooldown_active(incident):
-        return {"status": "deduplicated", "id": incident["id"]}
+        status = (incident.get("recommendation") or {}).get("investigation_status")
+        if status != "running":
+            return {"status": "deduplicated", "id": incident["id"]}
 
-    context = k8s.cluster_context(namespace) if namespace else ""
-    recommendation = grok.recommend(payload, context)
-    log.info(
-        "incident %s %s/%s grok action=%s: %s",
-        incident["id"],
-        namespace,
-        alertname,
-        recommendation.get("action_type"),
-        recommendation.get("summary"),
+    placeholder = grok._normalize(
+        {
+            "summary": "Grok is investigating the cluster (read-only).",
+            "root_cause": "Investigation in progress",
+            "how_to_resolve": [],
+            "action_type": "acknowledge",
+            "investigation_status": "running",
+        }
     )
-    db.save_recommendation(incident["id"], recommendation)
-    incident = db.get_by_id(incident["id"]) or incident
-    mailer.send_recommendation(incident, recommendation)
-    db.mark_notified(incident["id"])
-    return {"status": "processed", "id": incident["id"], "action_type": recommendation["action_type"]}
+    db.save_recommendation(incident["id"], placeholder)
+    _start_analysis(incident["id"], payload, namespace)
+    return {"status": "accepted", "id": incident["id"]}
+
+
+def _start_analysis(incident_id: int, payload: dict[str, Any], namespace: str) -> None:
+    with _analyze_lock:
+        if incident_id in _analyzing:
+            return
+        _analyzing.add(incident_id)
+
+    def _run() -> None:
+        try:
+            context = k8s.cluster_context(namespace) if namespace else ""
+            recommendation = grok.recommend(payload, context)
+            log.info(
+                "incident %s grok action=%s: %s",
+                incident_id,
+                recommendation.get("action_type"),
+                recommendation.get("summary"),
+            )
+            db.save_recommendation(incident_id, recommendation)
+            incident = db.get_by_id(incident_id)
+            if incident:
+                mailer.send_recommendation(incident, recommendation)
+                db.mark_notified(incident_id)
+        except Exception:
+            log.exception("background analysis failed for incident %s", incident_id)
+        finally:
+            with _analyze_lock:
+                _analyzing.discard(incident_id)
+
+    threading.Thread(target=_run, name=f"analyze-{incident_id}", daemon=True).start()
 
 
 def _apply_decision(incident: dict[str, Any], action: str, actor: str) -> dict[str, Any]:
@@ -249,6 +280,7 @@ def incidents(request: Request, status: str | None = None) -> dict[str, Any]:
                 "how_to_resolve": rec.get("how_to_resolve") or [],
                 "action_type": rec.get("action_type"),
                 "risk": rec.get("risk"),
+                "investigation_status": rec.get("investigation_status"),
             }
         )
     return {"incidents": summaries}
