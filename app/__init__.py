@@ -1,0 +1,1 @@
+"""Alert-processor application package."""

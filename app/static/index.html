@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="theme-color" content="#0d0d0d"/>
+  <title>Alert processor</title>
+  <link rel="manifest" href="/static/manifest.json"/>
+  <link rel="stylesheet" href="/static/styles.css"/>
+  <link rel="apple-touch-icon" href="/static/icon.svg"/>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="eyebrow">OpenShift Delta</p>
+      <h1>Alerts</h1>
+    </div>
+    <button id="logoutBtn" class="ghost" hidden>Log out</button>
+  </header>
+  <nav class="tabs">
+    <button data-filter="firing" class="active">Firing</button>
+    <button data-filter="">All</button>
+    <button data-filter="approved">History</button>
+  </nav>
+  <main id="app"></main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
