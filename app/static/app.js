@@ -64,10 +64,11 @@ function cardList(items) {
     .map(
       (item) => `
       <article class="card" data-id="${item.id}">
-        <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span></div>
+        <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">${item.action_type || "acknowledge"}</span></div>
         <h2>${item.alertname || "alert"}</h2>
-        <p class="muted">${item.namespace || "-"} · ${item.action_type || ""}</p>
+        <p class="muted">${item.namespace || "-"}</p>
         <p>${item.summary || ""}</p>
+        ${item.root_cause ? `<p class="muted">${item.root_cause}</p>` : ""}
       </article>`
     )
     .join("");
@@ -82,16 +83,35 @@ function cardList(items) {
 function detailView(item) {
   const rec = item.recommendation || {};
   const target = rec.target || {};
+  const steps = rec.how_to_resolve || [];
+  const gitops = rec.gitops || {};
+  const stepHtml = steps.length
+    ? `<ol class="steps">${steps.map((s) => `<li>${s}</li>`).join("")}</ol>`
+    : `<p class="muted">No step list yet. Tap Ask Grok again to refresh the recommendation.</p>`;
+  const targetTxt = [target.kind, target.namespace && target.name ? `${target.namespace}/${target.name}` : target.name, target.replicas != null ? `replicas=${target.replicas}` : ""]
+    .filter(Boolean)
+    .join(" ");
   app.innerHTML = `
     <p><button class="ghost" id="backBtn">← Inbox</button></p>
     <section class="card">
-      <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span></div>
+      <p class="eyebrow">Alert</p>
+      <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">risk ${rec.risk || "-"}</span></div>
       <h2>${item.alertname || "alert"}</h2>
       <p class="muted">${item.namespace || "-"} · updated ${item.updated_at || ""}</p>
-      <p><strong>${rec.summary || ""}</strong></p>
-      <p class="muted">${rec.root_cause || ""}</p>
-      <p><strong>Proposed:</strong> ${rec.action_type || "acknowledge"}</p>
-      <p class="muted">${target.kind || ""} ${target.namespace || ""}/${target.name || ""} ${target.replicas != null ? "replicas=" + target.replicas : ""}</p>
+    </section>
+    <section class="card">
+      <p class="eyebrow">Grok recommendation</p>
+      <p><strong>${rec.summary || "No summary"}</strong></p>
+      <p>${rec.root_cause || ""}</p>
+      <p class="eyebrow" style="margin-top:16px">How to resolve</p>
+      ${stepHtml}
+    </section>
+    <section class="card">
+      <p class="eyebrow">Executable action</p>
+      <p><strong>${rec.action_type || "acknowledge"}</strong> ${targetTxt}</p>
+      <p class="muted">${item.approval_effect || ""}</p>
+      ${gitops.rationale ? `<p class="muted">${gitops.rationale}</p>` : ""}
+      ${gitops.path ? `<p class="muted">GitOps path: ${gitops.path}</p>` : ""}
       ${item.action_result ? `<p class="ok">${item.action_result}</p>` : ""}
       <div id="actions"></div>
     </section>`;
@@ -102,9 +122,10 @@ function detailView(item) {
   if (["firing", "acknowledged", "resolved"].includes(item.status)) {
     const actions = document.getElementById("actions");
     actions.innerHTML = `
-      <button class="primary" id="approveBtn">Approve</button>
+      <button class="primary" id="approveBtn">Approve executable action</button>
       <button class="secondary" id="rejectBtn">Reject</button>
       <button class="secondary" id="ackBtn">Acknowledge only</button>
+      <button class="secondary" id="reanalyzeBtn">Ask Grok again</button>
       <p id="actionErr" class="err"></p>`;
     const run = (path) => async () => {
       try {
@@ -118,6 +139,7 @@ function detailView(item) {
     document.getElementById("approveBtn").onclick = run(`/api/v1/incidents/${item.id}/approve`);
     document.getElementById("rejectBtn").onclick = run(`/api/v1/incidents/${item.id}/reject`);
     document.getElementById("ackBtn").onclick = run(`/api/v1/incidents/${item.id}/acknowledge`);
+    document.getElementById("reanalyzeBtn").onclick = run(`/api/v1/incidents/${item.id}/reanalyze`);
   }
 }
 

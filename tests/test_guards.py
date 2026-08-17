@@ -61,6 +61,17 @@ class GrokNormalizeTests(unittest.TestCase):
     def test_unknown_action_becomes_acknowledge(self):
         rec = grok._normalize({"action_type": "rm -rf /", "summary": "nope"})
         self.assertEqual(rec["action_type"], "acknowledge")
+        self.assertEqual(rec["how_to_resolve"], [])
+
+    def test_how_to_resolve_list(self):
+        rec = grok._normalize(
+            {
+                "action_type": "acknowledge",
+                "how_to_resolve": ["check operator logs", "inspect DaemonSet"],
+            }
+        )
+        self.assertEqual(rec["how_to_resolve"], ["check operator logs", "inspect DaemonSet"])
+        self.assertIn("does not change the cluster", grok.approval_effect(rec))
 
 
 if __name__ == "__main__":

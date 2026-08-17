@@ -124,6 +124,14 @@ def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
 
     context = k8s.cluster_context(namespace) if namespace else ""
     recommendation = grok.recommend(payload, context)
+    log.info(
+        "incident %s %s/%s grok action=%s: %s",
+        incident["id"],
+        namespace,
+        alertname,
+        recommendation.get("action_type"),
+        recommendation.get("summary"),
+    )
     db.save_recommendation(incident["id"], recommendation)
     incident = db.get_by_id(incident["id"]) or incident
     mailer.send_recommendation(incident, recommendation)
@@ -237,6 +245,8 @@ def incidents(request: Request, status: str | None = None) -> dict[str, Any]:
                 "severity": item.get("severity"),
                 "updated_at": item.get("updated_at"),
                 "summary": rec.get("summary"),
+                "root_cause": rec.get("root_cause"),
+                "how_to_resolve": rec.get("how_to_resolve") or [],
                 "action_type": rec.get("action_type"),
                 "risk": rec.get("risk"),
             }
@@ -250,6 +260,33 @@ def incident_detail(request: Request, incident_id: int) -> dict[str, Any]:
     item = db.get_by_id(incident_id)
     if not item:
         raise HTTPException(status_code=404, detail="not found")
+    rec = item.get("recommendation") or {}
+    item["approval_effect"] = grok.approval_effect(rec)
+    return item
+
+
+@app.post("/api/v1/incidents/{incident_id}/reanalyze")
+def api_reanalyze(request: Request, incident_id: int) -> dict[str, Any]:
+    _require_session(request)
+    item = db.get_by_id(incident_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="not found")
+    payload = item.get("payload") or {}
+    namespace = str(item.get("namespace") or "")
+    context = k8s.cluster_context(namespace) if namespace else ""
+    recommendation = grok.recommend(payload, context)
+    log.info(
+        "reanalyze incident %s %s grok action=%s: %s",
+        incident_id,
+        item.get("alertname"),
+        recommendation.get("action_type"),
+        recommendation.get("summary"),
+    )
+    db.save_recommendation(incident_id, recommendation)
+    db.add_audit(incident_id, "reanalyze", "ui", recommendation.get("action_type") or "")
+    item = db.get_by_id(incident_id) or item
+    rec = item.get("recommendation") or {}
+    item["approval_effect"] = grok.approval_effect(rec)
     return item
 
 

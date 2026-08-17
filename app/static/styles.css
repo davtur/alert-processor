@@ -93,3 +93,11 @@ input[type="password"] {
 }
 .sheet { padding-top: 24px; }
 a { color: var(--text); }
+.steps {
+  margin: 8px 0 0;
+  padding-left: 22px;
+}
+.steps li {
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
