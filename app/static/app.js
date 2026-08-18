@@ -55,6 +55,37 @@ function loginForm(error = "") {
   });
 }
 
+function severityClass(sev) {
+  const s = (sev || "none").toLowerCase();
+  if (s === "critical" || s === "error") return "badge critical";
+  if (s === "warning") return "badge warning";
+  return "badge";
+}
+
+function prBlock(url, error) {
+  if (url) {
+    return `<p class="pr"><a class="pr-link" href="${url}" target="_blank" rel="noopener">${url}</a></p>`;
+  }
+  if (error) {
+    return `<p class="err">GitOps PR failed: ${error}</p>`;
+  }
+  return "";
+}
+
+function byPriority(items) {
+  const sev = { critical: 0, error: 1, warning: 2, info: 3, none: 4 };
+  const risk = { high: 0, medium: 1, low: 2 };
+  return [...items].sort((a, b) => {
+    const s = (sev[a.severity] ?? 5) - (sev[b.severity] ?? 5);
+    if (s) return s;
+    const r = (risk[a.risk] ?? 3) - (risk[b.risk] ?? 3);
+    if (r) return r;
+    const fire = Number(a.status !== "firing") - Number(b.status !== "firing");
+    if (fire) return fire;
+    return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+  });
+}
+
 function cardList(items) {
   if (!items.length) {
     app.innerHTML = `<section class="card"><p class="muted">No alerts in this view.</p></section>`;
@@ -64,11 +95,12 @@ function cardList(items) {
     .map(
       (item) => `
       <article class="card" data-id="${item.id}">
-        <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">${item.investigation_status === "running" ? "investigating" : (item.action_type || "acknowledge")}</span></div>
+        <div><span class="${severityClass(item.severity)}">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">${item.investigation_status === "running" ? "investigating" : (item.action_type || "acknowledge")}</span></div>
         <h2>${item.alertname || "alert"}</h2>
         <p class="muted">${item.namespace || "-"}</p>
         <p>${item.summary || ""}</p>
         ${item.root_cause ? `<p class="muted">${item.root_cause}</p>` : ""}
+        ${prBlock(item.pr_url, item.pr_error)}
       </article>`
     )
     .join("");
@@ -77,6 +109,9 @@ function cardList(items) {
       selectedId = Number(el.dataset.id);
       render();
     });
+  });
+  app.querySelectorAll("a.pr-link").forEach((el) => {
+    el.addEventListener("click", (ev) => ev.stopPropagation());
   });
 }
 
@@ -99,10 +134,19 @@ function detailView(item) {
     <p><button class="ghost" id="backBtn">← Inbox</button></p>
     <section class="card">
       <p class="eyebrow">Alert</p>
-      <div><span class="badge">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">risk ${rec.risk || "-"}</span></div>
+      <div><span class="${severityClass(item.severity)}">${item.severity || "none"}</span><span class="badge">${item.status}</span><span class="badge">risk ${rec.risk || "-"}</span></div>
       <h2>${item.alertname || "alert"}</h2>
       <p class="muted">${item.namespace || "-"} · updated ${item.updated_at || ""}</p>
     </section>
+    ${
+      rec.pr_url || rec.pr_error
+        ? `<section class="card">
+      <p class="eyebrow">GitOps pull request</p>
+      ${prBlock(rec.pr_url, rec.pr_error)}
+      <p class="muted">Review and merge in GitHub. The app does not merge or oc apply.</p>
+    </section>`
+        : ""
+    }
     <section class="card">
       <p class="eyebrow">Grok recommendation</p>
       <p><strong>${rec.summary || "No summary"}</strong></p>
@@ -174,7 +218,7 @@ async function render() {
     } else if (filter === "approved") {
       items = items.filter((i) => ["approved", "rejected", "acknowledged", "resolved"].includes(i.status));
     }
-    cardList(items);
+    cardList(byPriority(items));
   } catch (err) {
     if (err.message === "auth") {
       loginForm();

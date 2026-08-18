@@ -42,9 +42,10 @@ Reply with JSON only (no markdown) using this schema:
 }
 
 Rules:
-- Prefer gitops_pr when the lasting fix is config, operator settings, monitors, resources, node selectors, or anything that should survive a restart. Fill gitops.path and yaml_or_patch (full file or unified diff).
-- Use restart_deployment / delete_pod / scale_deployment only as a stop-gap when that immediately restores service AND name a real resource from the investigation. Still put the permanent fix in how_to_resolve.
-- acknowledge means there is no safe whitelist mutation to auto-run (operator internals, missing evidence, or the permanent fix cannot be expressed as a Git file yet). Still fill how_to_resolve with the permanent path.
+- Prefer gitops_pr when the lasting fix is config, operator settings, monitors, resources, node selectors, or anything that should survive a restart.
+- Whenever the lasting fix is YAML, always fill gitops.path and gitops.yaml_or_patch with a complete proposed file (not a sketch). The app opens a GitHub PR automatically when yaml_or_patch is non-empty. Do not wrap the YAML in markdown fences.
+- Use restart_deployment / delete_pod / scale_deployment only as a stop-gap when that immediately restores service AND name a real resource from the investigation. Still fill gitops.yaml_or_patch if a permanent GitOps change exists.
+- acknowledge means there is no safe whitelist mutation to auto-run (operator internals, missing evidence, or the permanent fix cannot be expressed as a Git file yet). Still fill how_to_resolve, and still fill gitops.yaml_or_patch when you can propose a file.
 - Always fill how_to_resolve with 3-6 concrete steps. Lead with the permanent fix, not a reboot.
 - Never invent resource names that were not in the alert or investigation findings.
 - Never recommend freeform shell, oc apply, or deleting namespaces as action_type.
@@ -100,6 +101,8 @@ def _normalize(rec: dict[str, Any]) -> dict[str, Any]:
         },
         "investigation": str(rec.get("investigation") or ""),
         "investigation_status": str(rec.get("investigation_status") or "done"),
+        "pr_url": str(rec.get("pr_url") or ""),
+        "pr_error": str(rec.get("pr_error") or ""),
     }
 
 
@@ -108,15 +111,36 @@ def approval_effect(rec: dict[str, Any]) -> str:
     target = rec.get("target") or {}
     ns = target.get("namespace") or ""
     name = target.get("name") or ""
+    pr_url = str(rec.get("pr_url") or "").strip()
+    gitops = rec.get("gitops") or {}
+    path = gitops.get("path") or "a file in openshift-delta"
+    pr_note = (
+        f" GitOps PR already opened: {pr_url}. It will not merge or oc apply."
+        if pr_url
+        else (
+            f" If the recommendation includes YAML, Approve also opens a GitHub PR on davtur/openshift-delta for {path}."
+            if gitops.get("yaml_or_patch")
+            else ""
+        )
+    )
     if action == "restart_deployment":
-        return f"Approve will patch Deployment {ns}/{name} with a restart annotation. No Git change."
+        return f"Approve will patch Deployment {ns}/{name} with a restart annotation.{pr_note}"
     if action == "delete_pod":
-        return f"Approve will delete Pod {ns}/{name} so the controller can recreate it. No Git change."
+        return f"Approve will delete Pod {ns}/{name} so the controller can recreate it.{pr_note}"
     if action == "scale_deployment":
-        return f"Approve will scale Deployment {ns}/{name} to {target.get('replicas')} replicas. No Git change."
+        return f"Approve will scale Deployment {ns}/{name} to {target.get('replicas')} replicas.{pr_note}"
     if action == "gitops_pr":
-        path = (rec.get("gitops") or {}).get("path") or "a file in openshift-delta"
+        if pr_url:
+            return (
+                f"A GitOps PR is already open: {pr_url}. Approve records that you accepted it. "
+                "It will not merge or oc apply."
+            )
         return f"Approve will open a GitHub PR on davtur/openshift-delta for {path}. It will not merge or oc apply."
+    if pr_url:
+        return (
+            "Approve with this action does not change the cluster. "
+            f"GitOps PR already opened: {pr_url}."
+        )
     return (
         "Approve with this action does not change the cluster. Use the how-to-resolve "
         "steps yourself, or Acknowledge only to dismiss."

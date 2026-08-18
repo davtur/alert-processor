@@ -41,6 +41,16 @@ h1 { margin: 4px 0 0; font-size: 28px; }
   gap: 8px;
   margin-bottom: 16px;
 }
+button {
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease, filter .15s ease;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
 .tabs button, .ghost, .primary, .secondary {
   min-height: 44px;
   border-radius: 12px;
@@ -49,25 +59,60 @@ h1 { margin: 4px 0 0; font-size: 28px; }
   font-weight: 600;
 }
 .tabs button, .ghost, .secondary {
-  background: var(--card);
+  background: #292929;
   color: var(--text);
   padding: 0 14px;
 }
-.tabs button.active { background: var(--red); }
+.tabs button:hover, .secondary:hover, .ghost:hover {
+  background: #3c3c3c;
+  color: #fff;
+}
+.tabs button:active, .secondary:active, .ghost:active {
+  background: #4d4d4d;
+}
+.tabs button.active {
+  background: var(--red);
+  color: #fff;
+}
+.tabs button.active:hover { background: #ff1a1a; }
+.tabs button.active:active { background: #c40000; }
 .primary {
   background: var(--red);
   color: #fff;
   width: 100%;
   margin: 8px 0;
 }
-.secondary { width: 100%; margin: 8px 0; }
-.ghost { background: transparent; color: var(--muted); }
+.primary:hover { background: #ff1a1a; }
+.primary:active { background: #c40000; }
+.secondary {
+  width: 100%;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+}
+.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+.ghost:hover {
+  background: #292929;
+  color: #fff;
+}
+button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
 .card {
   background: var(--card);
   border-radius: 16px;
   padding: 16px;
   margin-bottom: 12px;
 }
+article.card {
+  cursor: pointer;
+  transition: background-color .15s ease;
+}
+article.card:hover { background: #222; }
+article.card:active { background: #292929; }
 .card h2 { margin: 0 0 8px; font-size: 18px; }
 .muted, .err { color: var(--muted); }
 .err { color: #ff6b6b; }
@@ -80,6 +125,11 @@ h1 { margin: 4px 0 0; font-size: 28px; }
   background: var(--line);
   margin-right: 6px;
 }
+.badge.critical { background: #a60000; color: #fff; }
+.badge.warning { background: #8a6d00; color: #fff; }
+a.pr-link { color: #8fd19e; word-break: break-all; cursor: pointer; }
+a.pr-link:hover { text-decoration: underline; }
+.pr { margin: 8px 0 0; }
 input[type="password"] {
   width: 100%;
   min-height: 48px;

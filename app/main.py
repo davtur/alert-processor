@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import config, db, github_pr, grok, k8s, mailer, tokens
+from app import config, db, github_pr, grok, k8s, mailer, priority, tokens
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("alert-processor")
@@ -150,10 +150,14 @@ def _start_analysis(incident_id: int, payload: dict[str, Any], namespace: str) -
         try:
             context = k8s.cluster_context(namespace) if namespace else ""
             recommendation = grok.recommend(payload, context)
+            incident = db.get_by_id(incident_id)
+            if incident:
+                recommendation = _open_yaml_pr(incident, recommendation)
             log.info(
-                "incident %s grok action=%s: %s",
+                "incident %s grok action=%s pr=%s: %s",
                 incident_id,
                 recommendation.get("action_type"),
+                recommendation.get("pr_url") or recommendation.get("pr_error") or "-",
                 recommendation.get("summary"),
             )
             db.save_recommendation(incident_id, recommendation)
@@ -168,6 +172,26 @@ def _start_analysis(incident_id: int, payload: dict[str, Any], namespace: str) -
                 _analyzing.discard(incident_id)
 
     threading.Thread(target=_run, name=f"analyze-{incident_id}", daemon=True).start()
+
+
+def _open_yaml_pr(incident: dict[str, Any], rec: dict[str, Any]) -> dict[str, Any]:
+    if rec.get("pr_url"):
+        return rec
+    if not github_pr.has_yaml_proposal(rec):
+        return rec
+    gitops = rec.get("gitops") if isinstance(rec.get("gitops"), dict) else {}
+    rec["gitops"] = gitops
+    gitops["path"] = github_pr.resolve_path(incident, rec)
+    try:
+        url = github_pr.ensure_pr(incident, rec)
+        rec["pr_url"] = url
+        rec["pr_error"] = ""
+        db.add_audit(incident["id"], "gitops_pr", "app", url)
+        log.info("incident %s opened GitOps PR %s", incident["id"], url)
+    except github_pr.GitOpsError as exc:
+        rec["pr_error"] = str(exc)
+        log.warning("incident %s GitOps PR failed: %s", incident["id"], exc)
+    return rec
 
 
 def _apply_decision(incident: dict[str, Any], action: str, actor: str) -> dict[str, Any]:
@@ -187,26 +211,37 @@ def _apply_decision(incident: dict[str, Any], action: str, actor: str) -> dict[s
 
     action_type = rec.get("action_type") or "acknowledge"
     origin_ns = str(incident.get("namespace") or "")
+    results: list[str] = []
+    pr_url = str(rec.get("pr_url") or "").strip()
     try:
-        if action_type == "gitops_pr":
-            result = github_pr.create_pr(incident, rec)
-            db.set_status(incident["id"], "approved", result)
-            db.add_audit(incident["id"], "approve", actor, result)
-            mailer.send_action_result(
-                incident,
-                f"[APPROVED] {incident.get('alertname')} GitOps PR opened",
-                f"PR: {result}\nThis will not merge automatically.",
-            )
-            return {"status": "approved", "id": incident["id"], "result": result, "pr_url": result}
-        result = k8s.execute(rec, origin_ns)
-        db.set_status(incident["id"], "approved", result)
-        db.add_audit(incident["id"], "approve", actor, result)
+        if github_pr.has_yaml_proposal(rec) or action_type == "gitops_pr":
+            if not pr_url:
+                pr_url = github_pr.ensure_pr(incident, rec)
+                rec["pr_url"] = pr_url
+                rec["pr_error"] = ""
+                db.save_recommendation(incident["id"], rec)
+            results.append(pr_url)
+            db.add_audit(incident["id"], "gitops_pr", actor, pr_url)
+
+        if action_type in {"restart_deployment", "delete_pod", "scale_deployment"}:
+            result = k8s.execute(rec, origin_ns)
+            results.append(result)
+
+        if action_type == "gitops_pr" and not pr_url:
+            raise github_pr.GitOpsError("gitops yaml_or_patch is empty")
+
+        summary = "; ".join(part for part in results if part) or "No cluster change"
+        db.set_status(incident["id"], "approved", summary)
+        db.add_audit(incident["id"], "approve", actor, summary)
         mailer.send_action_result(
             incident,
             f"[APPROVED] {incident.get('alertname')} {action_type}",
-            result,
+            summary if not pr_url else f"{summary}\nPR: {pr_url}\nThis will not merge automatically.",
         )
-        return {"status": "approved", "id": incident["id"], "result": result}
+        out: dict[str, Any] = {"status": "approved", "id": incident["id"], "result": summary}
+        if pr_url:
+            out["pr_url"] = pr_url
+        return out
     except (k8s.ActionError, github_pr.GitOpsError) as exc:
         db.add_audit(incident["id"], "approve_failed", actor, str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -263,7 +298,7 @@ def session(request: Request) -> dict[str, bool]:
 @app.get("/api/v1/incidents")
 def incidents(request: Request, status: str | None = None) -> dict[str, Any]:
     _require_session(request)
-    items = db.list_incidents(status=status)
+    items = priority.sort_incidents(db.list_incidents(status=status))
     summaries = []
     for item in items:
         rec = item.get("recommendation") or {}
@@ -281,6 +316,8 @@ def incidents(request: Request, status: str | None = None) -> dict[str, Any]:
                 "action_type": rec.get("action_type"),
                 "risk": rec.get("risk"),
                 "investigation_status": rec.get("investigation_status"),
+                "pr_url": rec.get("pr_url") or "",
+                "pr_error": rec.get("pr_error") or "",
             }
         )
     return {"incidents": summaries}
@@ -307,11 +344,13 @@ def api_reanalyze(request: Request, incident_id: int) -> dict[str, Any]:
     namespace = str(item.get("namespace") or "")
     context = k8s.cluster_context(namespace) if namespace else ""
     recommendation = grok.recommend(payload, context)
+    recommendation = _open_yaml_pr(item, recommendation)
     log.info(
-        "reanalyze incident %s %s grok action=%s: %s",
+        "reanalyze incident %s %s grok action=%s pr=%s: %s",
         incident_id,
         item.get("alertname"),
         recommendation.get("action_type"),
+        recommendation.get("pr_url") or recommendation.get("pr_error") or "-",
         recommendation.get("summary"),
     )
     db.save_recommendation(incident_id, recommendation)
@@ -362,12 +401,16 @@ def _token_page(token: str, error: str = "", payload: dict[str, Any] | None = No
     elif result:
         body = f"<p class='ok'>Done: {result.get('status')}</p><p>{result.get('result') or result.get('pr_url') or ''}</p>"
     elif incident:
+        pr_html = ""
+        if rec.get("pr_url"):
+            pr_html = f'<p class="ok"><a href="{rec.get("pr_url")}">{rec.get("pr_url")}</a></p>'
         body = f"""
         <p class="eyebrow">{incident.get('namespace') or '-'} · {incident.get('severity') or '-'}</p>
         <h1>{incident.get('alertname')}</h1>
         <p>{rec.get('summary') or ''}</p>
         <p class="muted">{rec.get('root_cause') or ''}</p>
         <p><strong>Action:</strong> {rec.get('action_type')}</p>
+        {pr_html}
         <form method="post" action="/t/{token}">
           <button class="primary" type="submit">Confirm {action}</button>
         </form>

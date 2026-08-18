@@ -10,8 +10,8 @@ os.environ["XAI_API_KEY"] = ""
 os.environ["SMTP_PASSWORD"] = ""
 os.environ["GITHUB_TOKEN"] = ""
 
-from app import grok, k8s, tokens
-from app.github_pr import GitOpsError, validate_path
+from app import grok, k8s, priority, tokens
+from app.github_pr import GitOpsError, has_yaml_proposal, resolve_path, validate_path, yaml_body
 
 
 class TokenTests(unittest.TestCase):
@@ -57,6 +57,81 @@ class GitOpsPathTests(unittest.TestCase):
         with self.assertRaises(GitOpsError):
             validate_path("scripts/seal-secrets.sh")
 
+    def test_yaml_body_strips_fences(self):
+        body = yaml_body("```yaml\napiVersion: v1\nkind: ConfigMap\n```")
+        self.assertIn("kind: ConfigMap", body)
+        self.assertFalse(body.startswith("```"))
+
+    def test_has_yaml_proposal(self):
+        self.assertFalse(has_yaml_proposal({"gitops": {"yaml_or_patch": ""}}))
+        self.assertFalse(has_yaml_proposal({"gitops": {"yaml_or_patch": "# just a comment"}}))
+        self.assertTrue(
+            has_yaml_proposal({"gitops": {"yaml_or_patch": "apiVersion: v1\nkind: ConfigMap\n"}})
+        )
+
+    def test_resolve_path_fallback(self):
+        path = resolve_path(
+            {"id": 42, "alertname": "KubePodCrashLooping"},
+            {"gitops": {"path": "not-a-valid-path", "yaml_or_patch": "kind: ConfigMap\n"}},
+        )
+        self.assertEqual(path, "apps-kustomize/alert-processor/proposals/42-kubepodcrashlooping.yaml")
+
+
+class PriorityTests(unittest.TestCase):
+    def test_critical_before_warning(self):
+        items = [
+            {
+                "id": 1,
+                "severity": "warning",
+                "status": "firing",
+                "updated_at": "2026-08-18T12:00:00+00:00",
+                "recommendation": {"risk": "high"},
+            },
+            {
+                "id": 2,
+                "severity": "critical",
+                "status": "firing",
+                "updated_at": "2026-08-18T11:00:00+00:00",
+                "recommendation": {"risk": "low"},
+            },
+            {
+                "id": 3,
+                "severity": "info",
+                "status": "firing",
+                "updated_at": "2026-08-18T13:00:00+00:00",
+                "recommendation": {"risk": "medium"},
+            },
+        ]
+        ordered = priority.sort_incidents(items)
+        self.assertEqual([i["id"] for i in ordered], [2, 1, 3])
+
+    def test_same_severity_uses_risk_then_recency(self):
+        items = [
+            {
+                "id": 1,
+                "severity": "warning",
+                "status": "firing",
+                "updated_at": "2026-08-18T10:00:00+00:00",
+                "recommendation": {"risk": "low"},
+            },
+            {
+                "id": 2,
+                "severity": "warning",
+                "status": "firing",
+                "updated_at": "2026-08-18T12:00:00+00:00",
+                "recommendation": {"risk": "high"},
+            },
+            {
+                "id": 3,
+                "severity": "warning",
+                "status": "firing",
+                "updated_at": "2026-08-18T11:00:00+00:00",
+                "recommendation": {"risk": "high"},
+            },
+        ]
+        ordered = priority.sort_incidents(items)
+        self.assertEqual([i["id"] for i in ordered], [2, 3, 1])
+
 
 class GrokNormalizeTests(unittest.TestCase):
     def test_unknown_action_becomes_acknowledge(self):
@@ -73,6 +148,15 @@ class GrokNormalizeTests(unittest.TestCase):
         )
         self.assertEqual(rec["how_to_resolve"], ["check operator logs", "inspect DaemonSet"])
         self.assertIn("does not change the cluster", grok.approval_effect(rec))
+
+    def test_approval_effect_includes_existing_pr(self):
+        rec = grok._normalize(
+            {
+                "action_type": "acknowledge",
+                "pr_url": "https://github.com/davtur/openshift-delta/pull/11",
+            }
+        )
+        self.assertIn("https://github.com/davtur/openshift-delta/pull/11", grok.approval_effect(rec))
 
 
 class InvestigateToolTests(unittest.TestCase):
