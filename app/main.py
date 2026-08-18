@@ -50,7 +50,24 @@ class AlertmanagerWebhook(BaseModel):
     alerts: list[dict[str, Any]] = Field(default_factory=list)
 
 
+def _peer_is_local(request: Request) -> bool:
+    host = (request.client.host if request.client else "") or ""
+    return host in {"127.0.0.1", "::1", "testclient"}
+
+
+def _oauth_user(request: Request) -> str:
+    if not _peer_is_local(request):
+        return ""
+    return (
+        request.headers.get("X-Forwarded-User")
+        or request.headers.get("X-Remote-User")
+        or ""
+    ).strip()
+
+
 def _session_ok(request: Request) -> bool:
+    if _oauth_user(request):
+        return True
     token = request.cookies.get(SESSION_COOKIE, "")
     return bool(token) and tokens.is_session_token(token)
 
@@ -58,6 +75,10 @@ def _session_ok(request: Request) -> bool:
 def _require_session(request: Request) -> None:
     if not _session_ok(request):
         raise HTTPException(status_code=401, detail="login required")
+
+
+def _actor(request: Request, default: str) -> str:
+    return _oauth_user(request) or default
 
 
 def _should_skip(payload: dict[str, Any]) -> bool:
@@ -287,12 +308,21 @@ def login(body: LoginBody) -> JSONResponse:
 def logout() -> JSONResponse:
     response = JSONResponse({"status": "ok"})
     response.delete_cookie(SESSION_COOKIE, path="/")
+    if config.OAUTH_COOKIE_NAME:
+        response.delete_cookie(config.OAUTH_COOKIE_NAME, path="/")
     return response
 
 
 @app.get("/api/v1/session")
-def session(request: Request) -> dict[str, bool]:
-    return {"authenticated": _session_ok(request)}
+def session(request: Request) -> dict[str, Any]:
+    user = _oauth_user(request)
+    authenticated = _session_ok(request)
+    return {
+        "authenticated": authenticated,
+        "user": user or None,
+        "auth": "openshift" if user else ("password" if authenticated else None),
+        "logout_url": config.OAUTH_LOGOUT_URL if user else "",
+    }
 
 
 @app.get("/api/v1/incidents")
@@ -354,7 +384,7 @@ def api_reanalyze(request: Request, incident_id: int) -> dict[str, Any]:
         recommendation.get("summary"),
     )
     db.save_recommendation(incident_id, recommendation)
-    db.add_audit(incident_id, "reanalyze", "ui", recommendation.get("action_type") or "")
+    db.add_audit(incident_id, "reanalyze", _actor(request, "ui"), recommendation.get("action_type") or "")
     item = db.get_by_id(incident_id) or item
     rec = item.get("recommendation") or {}
     item["approval_effect"] = grok.approval_effect(rec)
@@ -367,7 +397,7 @@ def api_approve(request: Request, incident_id: int) -> dict[str, Any]:
     item = db.get_by_id(incident_id)
     if not item:
         raise HTTPException(status_code=404, detail="not found")
-    return _apply_decision(item, "approve", "ui")
+    return _apply_decision(item, "approve", _actor(request, "ui"))
 
 
 @app.post("/api/v1/incidents/{incident_id}/reject")
@@ -376,7 +406,7 @@ def api_reject(request: Request, incident_id: int) -> dict[str, Any]:
     item = db.get_by_id(incident_id)
     if not item:
         raise HTTPException(status_code=404, detail="not found")
-    return _apply_decision(item, "reject", "ui")
+    return _apply_decision(item, "reject", _actor(request, "ui"))
 
 
 @app.post("/api/v1/incidents/{incident_id}/acknowledge")
@@ -385,7 +415,7 @@ def api_ack(request: Request, incident_id: int) -> dict[str, Any]:
     item = db.get_by_id(incident_id)
     if not item:
         raise HTTPException(status_code=404, detail="not found")
-    return _apply_decision(item, "acknowledge", "ui")
+    return _apply_decision(item, "acknowledge", _actor(request, "ui"))
 
 
 def _token_page(token: str, error: str = "", payload: dict[str, Any] | None = None, result: dict[str, Any] | None = None) -> str:

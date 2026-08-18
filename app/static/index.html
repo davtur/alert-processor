@@ -9,7 +9,7 @@
   <title>Alert processor</title>
   <link rel="manifest" href="/static/manifest.json"/>
   <link rel="stylesheet" href="/static/styles.css"/>
-  <link rel="apple-touch-icon" href="/static/icon.svg"/>
+  <link rel="apple-touch-icon" href="/static/console-icon.png"/>
 </head>
 <body>
   <header class="top">
@@ -17,7 +17,10 @@
       <p class="eyebrow">OpenShift Delta</p>
       <h1>Alerts</h1>
     </div>
-    <button id="logoutBtn" class="ghost" hidden>Log out</button>
+    <div class="top-actions">
+      <p id="userLabel" class="muted user-label" hidden></p>
+      <button id="logoutBtn" class="ghost" hidden>Log out</button>
+    </div>
   </header>
   <nav class="tabs">
     <button data-filter="firing" class="active">Firing</button>

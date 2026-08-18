@@ -22,6 +22,8 @@ uvicorn app.main:app --reload --port 8080
 
 Open http://127.0.0.1:8080 and log in with `AUTH_PASSWORD`.
 
+On the cluster the public Route sits behind OpenShift oauth-proxy. Any logged-in OpenShift user (Google or htpasswd) can open the app from the console launcher or `https://alert-processor.apps.delta.drtsoft.com`. Signed Gmail approval links (`/t/...`) skip that login. Alertmanager still posts to the in-cluster Service on port 8080.
+
 Simulate Alertmanager:
 
 ```bash
@@ -40,7 +42,8 @@ curl -sS http://127.0.0.1:8080/api/v1/webhook \
 | `XAI_MODEL` | default `grok-4-1-fast-non-reasoning` |
 | `SMTP_PASSWORD` | Gmail app password for `davtur@gmail.com` |
 | `GITHUB_TOKEN` | PAT with `repo` on `davtur/openshift-delta` |
-| `AUTH_PASSWORD` | Shared password for the mobile inbox |
+| `AUTH_PASSWORD` | Shared password for local/dev inbox access |
+| `OAUTH_LOGOUT_URL` | OpenShift logout URL used by the Log out button in-cluster |
 | `SIGNING_SECRET` | HMAC secret for email tokens and session cookies |
 | `PUBLIC_BASE_URL` | Public Route URL used in email links |
 | `DATA_DIR` | SQLite directory (PVC `/data` in-cluster) |
@@ -50,7 +53,7 @@ curl -sS http://127.0.0.1:8080/api/v1/webhook \
 1. Alertmanager posts to the in-cluster webhook (not on the Route).
 2. Grok returns JSON (`restart_deployment`, `delete_pod`, `scale_deployment`, `gitops_pr`, or `acknowledge`).
 3. Gmail gets Review/Reject links. Those pages confirm with POST so mail prefetch cannot execute.
-4. The PWA at `https://alert-processor.apps.delta.drtsoft.com` lists firing alerts. Add to iPhone Home Screen from Safari.
+4. The PWA at `https://alert-processor.apps.delta.drtsoft.com` lists firing alerts after OpenShift login. Add to iPhone Home Screen from Safari. The OpenShift console Application menu also links here.
 
 ## Image
 

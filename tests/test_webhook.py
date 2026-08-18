@@ -12,7 +12,10 @@ os.environ["PUBLIC_BASE_URL"] = "http://127.0.0.1:8080"
 
 from fastapi.testclient import TestClient
 
+from app import db
 from app.main import app
+
+db.init()
 
 
 class WebhookTests(unittest.TestCase):
@@ -33,3 +36,21 @@ class WebhookTests(unittest.TestCase):
     def test_healthz(self):
         client = TestClient(app)
         self.assertEqual(client.get("/healthz").json(), {"status": "ok"})
+
+    def test_session_unauthenticated(self):
+        client = TestClient(app)
+        self.assertEqual(client.get("/api/v1/session").json()["authenticated"], False)
+
+    def test_openshift_header_authenticates(self):
+        client = TestClient(app)
+        res = client.get("/api/v1/session", headers={"X-Forwarded-User": "davtur"})
+        data = res.json()
+        self.assertTrue(data["authenticated"])
+        self.assertEqual(data["user"], "davtur")
+        self.assertEqual(data["auth"], "openshift")
+        inbox = client.get("/api/v1/incidents", headers={"X-Forwarded-User": "davtur"})
+        self.assertEqual(inbox.status_code, 200)
+
+    def test_incidents_require_login(self):
+        client = TestClient(app)
+        self.assertEqual(client.get("/api/v1/incidents").status_code, 401)

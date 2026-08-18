@@ -1,7 +1,9 @@
 const app = document.getElementById("app");
 const logoutBtn = document.getElementById("logoutBtn");
+const userLabel = document.getElementById("userLabel");
 let filter = "firing";
 let selectedId = null;
+let logoutUrl = "";
 
 document.querySelectorAll(".tabs button").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -14,8 +16,14 @@ document.querySelectorAll(".tabs button").forEach((btn) => {
 });
 
 logoutBtn.addEventListener("click", async () => {
-  await fetch("/api/v1/logout", { method: "POST" });
+  const dest = logoutUrl;
+  await fetch("/api/v1/logout", { method: "POST", credentials: "same-origin" });
   selectedId = null;
+  logoutUrl = "";
+  if (dest) {
+    window.location.href = dest;
+    return;
+  }
   render();
 });
 
@@ -35,7 +43,7 @@ function loginForm(error = "") {
   app.innerHTML = `
     <section class="card">
       <h2>Unlock inbox</h2>
-      <p class="muted">Use the shared app password. Email approval links still work without this.</p>
+      <p class="muted">On the cluster, OpenShift login is used (Google or htpasswd). This password is only for local access.</p>
       ${error ? `<p class="err">${error}</p>` : ""}
       <form id="loginForm">
         <input type="password" name="password" autocomplete="current-password" placeholder="Password" required/>
@@ -202,10 +210,19 @@ async function render() {
     const session = await api("/api/v1/session");
     if (!session.authenticated) {
       logoutBtn.hidden = true;
+      userLabel.hidden = true;
+      logoutUrl = "";
       loginForm();
       return;
     }
     logoutBtn.hidden = false;
+    logoutUrl = session.logout_url || "";
+    if (session.user) {
+      userLabel.hidden = false;
+      userLabel.textContent = session.user;
+    } else {
+      userLabel.hidden = true;
+    }
     if (selectedId) {
       const item = await api(`/api/v1/incidents/${selectedId}`);
       detailView(item);

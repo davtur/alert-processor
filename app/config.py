@@ -29,6 +29,11 @@ AUTH_PASSWORD = _env("AUTH_PASSWORD")
 SIGNING_SECRET = _env("SIGNING_SECRET") or AUTH_PASSWORD or "dev-signing-secret"
 
 PUBLIC_BASE_URL = _env("PUBLIC_BASE_URL", "https://alert-processor.apps.delta.drtsoft.com").rstrip("/")
+OAUTH_COOKIE_NAME = _env("OAUTH_COOKIE_NAME", "_oauth_proxy_ap")
+OAUTH_LOGOUT_URL = _env(
+    "OAUTH_LOGOUT_URL",
+    "https://oauth-openshift.apps.delta.drtsoft.com/logout?then=https://alert-processor.apps.delta.drtsoft.com",
+)
 DATA_DIR = Path(_env("DATA_DIR", "/data"))
 DB_PATH = Path(_env("DB_PATH", str(DATA_DIR / "alert-processor.db")))
 

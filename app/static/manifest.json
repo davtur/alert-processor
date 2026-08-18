@@ -11,6 +11,12 @@
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
+    },
+    {
+      "src": "/static/console-icon.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }

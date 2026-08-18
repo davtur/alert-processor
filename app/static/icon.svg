@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
   <rect width="180" height="180" rx="40" fill="#151515"/>
-  <rect x="20" y="20" width="140" height="140" rx="28" fill="#ee0000"/>
-  <text x="90" y="112" text-anchor="middle" font-size="72" font-family="-apple-system,Helvetica,Arial" fill="#ffffff">A</text>
+  <polygon points="90,28 156,148 24,148" fill="#EE0000"/>
+  <rect x="82" y="68" width="16" height="44" rx="4" fill="#FFFFFF"/>
+  <circle cx="90" cy="128" r="8" fill="#FFFFFF"/>
 </svg>
