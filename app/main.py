@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import threading
 from datetime import datetime, timezone
@@ -51,19 +50,10 @@ class AlertmanagerWebhook(BaseModel):
     alerts: list[dict[str, Any]] = Field(default_factory=list)
 
 
-def _peer_is_local(request: Request) -> bool:
-    host = (request.client.host if request.client else "") or ""
-    if host in {"testclient"}:
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
 def _oauth_user(request: Request) -> str:
-    if not _peer_is_local(request):
-        return ""
+    # oauth-proxy (sidecar) sets these after OpenShift login. Do not require a
+    # loopback peer: uvicorn enables proxy-headers in a container and rewrites
+    # request.client to the router/client IP from X-Forwarded-For.
     return (
         request.headers.get("X-Forwarded-User")
         or request.headers.get("X-Forwarded-Email")
