@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import threading
 from datetime import datetime, timezone
@@ -52,7 +53,12 @@ class AlertmanagerWebhook(BaseModel):
 
 def _peer_is_local(request: Request) -> bool:
     host = (request.client.host if request.client else "") or ""
-    return host in {"127.0.0.1", "::1", "testclient"}
+    if host in {"testclient"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _oauth_user(request: Request) -> str:
@@ -60,7 +66,9 @@ def _oauth_user(request: Request) -> str:
         return ""
     return (
         request.headers.get("X-Forwarded-User")
+        or request.headers.get("X-Forwarded-Email")
         or request.headers.get("X-Remote-User")
+        or request.headers.get("GAP-Auth")
         or ""
     ).strip()
 

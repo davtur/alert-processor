@@ -51,6 +51,17 @@ class WebhookTests(unittest.TestCase):
         inbox = client.get("/api/v1/incidents", headers={"X-Forwarded-User": "davtur"})
         self.assertEqual(inbox.status_code, 200)
 
+    def test_openshift_email_header_authenticates(self):
+        client = TestClient(app)
+        res = client.get(
+            "/api/v1/session",
+            headers={"X-Forwarded-User": "", "X-Forwarded-Email": "david@manlyit.com.au"},
+        )
+        data = res.json()
+        self.assertTrue(data["authenticated"])
+        self.assertEqual(data["user"], "david@manlyit.com.au")
+        self.assertEqual(data["auth"], "openshift")
+
     def test_incidents_require_login(self):
         client = TestClient(app)
         self.assertEqual(client.get("/api/v1/incidents").status_code, 401)
