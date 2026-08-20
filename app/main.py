@@ -28,7 +28,7 @@ _analyzing: set[int] = set()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init()
-    log.info("alert-processor ready, db=%s", config.DB_PATH)
+    log.info("alert-processor ready, db=%s", db.describe())
     yield
 
 
@@ -272,6 +272,13 @@ def _apply_decision(incident: dict[str, Any], action: str, actor: str) -> dict[s
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz() -> dict[str, str]:
+    if not db.ping():
+        raise HTTPException(status_code=503, detail="database unavailable")
     return {"status": "ok"}
 
 

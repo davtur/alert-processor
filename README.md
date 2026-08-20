@@ -46,7 +46,8 @@ curl -sS http://127.0.0.1:8080/api/v1/webhook \
 | `OAUTH_LOGOUT_URL` | OpenShift logout URL used by the Log out button in-cluster |
 | `SIGNING_SECRET` | HMAC secret for email tokens and session cookies |
 | `PUBLIC_BASE_URL` | Public Route URL used in email links |
-| `DATA_DIR` | SQLite directory (PVC `/data` in-cluster) |
+| `DATABASE_URL` | PostgreSQL URL in-cluster (`alert-processor-pg-app` secret). Empty uses SQLite at `DATA_DIR` |
+| `DATA_DIR` | SQLite directory for local/dev when `DATABASE_URL` is unset |
 
 ## Approval flow
 

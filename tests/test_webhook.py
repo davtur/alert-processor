@@ -37,6 +37,10 @@ class WebhookTests(unittest.TestCase):
         client = TestClient(app)
         self.assertEqual(client.get("/healthz").json(), {"status": "ok"})
 
+    def test_readyz(self):
+        client = TestClient(app)
+        self.assertEqual(client.get("/readyz").json(), {"status": "ok"})
+
     def test_session_unauthenticated(self):
         client = TestClient(app)
         self.assertEqual(client.get("/api/v1/session").json()["authenticated"], False)

@@ -36,6 +36,7 @@ OAUTH_LOGOUT_URL = _env(
 )
 DATA_DIR = Path(_env("DATA_DIR", "/data"))
 DB_PATH = Path(_env("DB_PATH", str(DATA_DIR / "alert-processor.db")))
+DATABASE_URL = _env("DATABASE_URL")
 
 SKIP_ALERTNAMES = {
     name.strip()
