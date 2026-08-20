@@ -182,7 +182,7 @@ function detailView(item) {
       <button class="primary" id="approveBtn">Approve executable action</button>
       <button class="secondary" id="rejectBtn">Reject</button>
       <button class="secondary" id="ackBtn">Acknowledge only</button>
-      <button class="secondary" id="reanalyzeBtn">Ask Grok again</button>
+      <button class="secondary" id="reanalyzeBtn"${investigating ? " disabled" : ""}>${investigating ? "Asking Grok…" : "Ask Grok again"}</button>
       <p id="actionErr" class="err"></p>`;
     const run = (path) => async () => {
       try {
@@ -196,7 +196,20 @@ function detailView(item) {
     document.getElementById("approveBtn").onclick = run(`/api/v1/incidents/${item.id}/approve`);
     document.getElementById("rejectBtn").onclick = run(`/api/v1/incidents/${item.id}/reject`);
     document.getElementById("ackBtn").onclick = run(`/api/v1/incidents/${item.id}/acknowledge`);
-    document.getElementById("reanalyzeBtn").onclick = run(`/api/v1/incidents/${item.id}/reanalyze`);
+    document.getElementById("reanalyzeBtn").onclick = async () => {
+      const btn = document.getElementById("reanalyzeBtn");
+      btn.disabled = true;
+      btn.textContent = "Asking Grok…";
+      try {
+        await api(`/api/v1/incidents/${item.id}/reanalyze`, { method: "POST", body: "{}" });
+        selectedId = item.id;
+        render();
+      } catch (err) {
+        document.getElementById("actionErr").textContent = err.message;
+        btn.disabled = false;
+        btn.textContent = "Ask Grok again";
+      }
+    };
   }
   if (investigating) {
     window.setTimeout(() => {

@@ -159,7 +159,7 @@ def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     return {"status": "accepted", "id": incident["id"]}
 
 
-def _start_analysis(incident_id: int, payload: dict[str, Any], namespace: str) -> None:
+def _start_analysis(incident_id: int, payload: dict[str, Any], namespace: str, notify: bool = True) -> None:
     with _analyze_lock:
         if incident_id in _analyzing:
             return
@@ -180,10 +180,11 @@ def _start_analysis(incident_id: int, payload: dict[str, Any], namespace: str) -
                 recommendation.get("summary"),
             )
             db.save_recommendation(incident_id, recommendation)
-            incident = db.get_by_id(incident_id)
-            if incident:
-                mailer.send_recommendation(incident, recommendation)
-                db.mark_notified(incident_id)
+            if notify:
+                incident = db.get_by_id(incident_id)
+                if incident:
+                    mailer.send_recommendation(incident, recommendation)
+                    db.mark_notified(incident_id)
         except Exception:
             log.exception("background analysis failed for incident %s", incident_id)
         finally:
@@ -377,19 +378,21 @@ def api_reanalyze(request: Request, incident_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="not found")
     payload = item.get("payload") or {}
     namespace = str(item.get("namespace") or "")
-    context = k8s.cluster_context(namespace) if namespace else ""
-    recommendation = grok.recommend(payload, context)
-    recommendation = _open_yaml_pr(item, recommendation)
-    log.info(
-        "reanalyze incident %s %s grok action=%s pr=%s: %s",
-        incident_id,
-        item.get("alertname"),
-        recommendation.get("action_type"),
-        recommendation.get("pr_url") or recommendation.get("pr_error") or "-",
-        recommendation.get("summary"),
+    existing = item.get("recommendation") or {}
+    placeholder = grok._normalize(
+        {
+            "summary": "Grok is investigating the cluster (read-only).",
+            "root_cause": "Investigation in progress",
+            "how_to_resolve": [],
+            "action_type": "acknowledge",
+            "investigation_status": "running",
+            "pr_url": existing.get("pr_url") or "",
+            "pr_error": existing.get("pr_error") or "",
+        }
     )
-    db.save_recommendation(incident_id, recommendation)
-    db.add_audit(incident_id, "reanalyze", _actor(request, "ui"), recommendation.get("action_type") or "")
+    db.save_recommendation(incident_id, placeholder)
+    db.add_audit(incident_id, "reanalyze", _actor(request, "ui"), "queued")
+    _start_analysis(incident_id, payload, namespace, notify=False)
     item = db.get_by_id(incident_id) or item
     rec = item.get("recommendation") or {}
     item["approval_effect"] = grok.approval_effect(rec)

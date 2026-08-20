@@ -139,6 +139,25 @@ class GrokNormalizeTests(unittest.TestCase):
         self.assertEqual(rec["action_type"], "acknowledge")
         self.assertEqual(rec["how_to_resolve"], [])
 
+    def test_sanitize_assistant_drops_reasoning_fields(self):
+        cleaned = grok._sanitize_assistant(
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "secret chain",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "list_events", "arguments": {"namespace": "demo"}},
+                    }
+                ],
+            }
+        )
+        self.assertNotIn("reasoning_content", cleaned)
+        self.assertIsNone(cleaned["content"])
+        self.assertEqual(cleaned["tool_calls"][0]["function"]["arguments"], '{"namespace": "demo"}')
+
     def test_how_to_resolve_list(self):
         rec = grok._normalize(
             {

@@ -69,3 +69,36 @@ class WebhookTests(unittest.TestCase):
     def test_incidents_require_login(self):
         client = TestClient(app)
         self.assertEqual(client.get("/api/v1/incidents").status_code, 401)
+
+    def test_reanalyze_queues_background_job(self):
+        client = TestClient(app)
+        headers = {"X-Forwarded-User": "davtur"}
+        created = client.post(
+            "/api/v1/webhook",
+            json={
+                "status": "firing",
+                "groupKey": "{}:{alertname=ReanalyzeTest}",
+                "commonLabels": {
+                    "alertname": "ReanalyzeTest",
+                    "namespace": "alert-processor",
+                    "severity": "warning",
+                },
+                "alerts": [
+                    {
+                        "status": "firing",
+                        "labels": {
+                            "alertname": "ReanalyzeTest",
+                            "namespace": "alert-processor",
+                            "severity": "warning",
+                        },
+                        "fingerprint": "reanalyze-test",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+        incident_id = created.json()["id"]
+        res = client.post(f"/api/v1/incidents/{incident_id}/reanalyze", headers=headers)
+        self.assertEqual(res.status_code, 200)
+        rec = res.json().get("recommendation") or {}
+        self.assertIn(rec.get("investigation_status"), ("running", "done"))

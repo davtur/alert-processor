@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -154,6 +155,33 @@ def _headers() -> dict[str, str]:
     }
 
 
+CHAT_TIMEOUT = httpx.Timeout(180.0, connect=15.0)
+
+
+def _sanitize_assistant(message: dict[str, Any]) -> dict[str, Any]:
+    """Keep only role/content/tool_calls so xAI does not 400 on reasoning fields."""
+    out: dict[str, Any] = {"role": "assistant", "content": message.get("content") or ""}
+    calls = message.get("tool_calls") or []
+    if not calls:
+        return out
+    out["tool_calls"] = []
+    for call in calls:
+        fn = call.get("function") or {}
+        arguments = fn.get("arguments")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments or {})
+        out["tool_calls"].append(
+            {
+                "id": call.get("id") or "",
+                "type": call.get("type") or "function",
+                "function": {"name": fn.get("name") or "", "arguments": arguments},
+            }
+        )
+    if not out["content"]:
+        out["content"] = None
+    return out
+
+
 def _chat(client: httpx.Client, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": config.XAI_MODEL,
@@ -163,9 +191,24 @@ def _chat(client: httpx.Client, messages: list[dict[str, Any]], tools: list[dict
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
-    response = client.post(config.XAI_API_URL, headers=_headers(), json=body)
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            response = client.post(config.XAI_API_URL, headers=_headers(), json=body)
+            if response.status_code >= 400:
+                detail = (response.text or "")[:1500]
+                log.error("xAI HTTP %s: %s", response.status_code, detail)
+                raise httpx.HTTPStatusError(
+                    f"xAI HTTP {response.status_code}: {detail}",
+                    request=response.request,
+                    response=response,
+                )
+            return response.json()["choices"][0]["message"]
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_error = exc
+            log.warning("xAI attempt %s/3 failed: %s", attempt, exc)
+            time.sleep(1.5 * attempt)
+    raise last_error or RuntimeError("xAI chat failed")
 
 
 def _investigate(client: httpx.Client, payload: dict[str, Any], cluster_context: str) -> str:
@@ -189,7 +232,7 @@ def _investigate(client: httpx.Client, payload: dict[str, Any], cluster_context:
             findings = (message.get("content") or "").strip()
             log.info("Investigation finished after %s rounds (%s chars)", round_n + 1, len(findings))
             break
-        messages.append(message)
+        messages.append(_sanitize_assistant(message))
         for call in calls:
             fn = call.get("function") or {}
             name = fn.get("name") or ""
@@ -226,7 +269,7 @@ def recommend(payload: dict[str, Any], cluster_context: str = "") -> dict[str, A
         )
 
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=CHAT_TIMEOUT) as client:
             findings = _investigate(client, payload, cluster_context)
             conclude_messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -257,9 +300,12 @@ def recommend(payload: dict[str, Any], cluster_context: str = "") -> dict[str, A
             return rec
     except Exception as exc:
         log.exception("Grok recommendation failed")
+        detail = str(exc).replace("\n", " ")
+        if len(detail) > 400:
+            detail = detail[:400] + "…"
         return _normalize(
             {
-                "summary": f"Grok call failed: {exc}",
+                "summary": f"Grok call failed: {detail}",
                 "root_cause": "LLM error",
                 "risk": "low",
                 "action_type": "acknowledge",
