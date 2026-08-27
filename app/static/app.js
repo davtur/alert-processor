@@ -179,10 +179,10 @@ function detailView(item) {
   if (["firing", "acknowledged", "resolved"].includes(item.status)) {
     const actions = document.getElementById("actions");
     actions.innerHTML = `
-      <button class="primary" id="approveBtn">Approve executable action</button>
-      <button class="secondary" id="rejectBtn">Reject</button>
-      <button class="secondary" id="ackBtn">Acknowledge only</button>
-      <button class="secondary" id="reanalyzeBtn"${investigating ? " disabled" : ""}>${investigating ? "Asking Grok…" : "Ask Grok again"}</button>
+      <button class="primary" id="approveBtn" data-help="Runs Grok's recommended runtime action (restart, delete pod, or scale) if there is one, and opens a GitOps PR when YAML was proposed. Nothing is merged or oc applied automatically.">Approve executable action</button>
+      <button class="secondary" id="rejectBtn" data-help="Records that you declined this recommendation. No cluster change and no new pull request.">Reject</button>
+      <button class="secondary" id="ackBtn" data-help="Marks the alert as seen and leaves the cluster unchanged. Use this when you will fix it yourself or no whitelist action is safe.">Acknowledge only</button>
+      <button class="secondary" id="reanalyzeBtn"${investigating ? " disabled" : ""} data-help="${investigating ? "Grok is already investigating this alert. Wait for it to finish." : "Runs a new read-only investigation and replaces this recommendation. Uses xAI credits."}">${investigating ? "Asking Grok…" : "Ask Grok again"}</button>
       <p id="actionErr" class="err"></p>`;
     const run = (path) => async () => {
       try {

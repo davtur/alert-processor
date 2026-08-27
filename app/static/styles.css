@@ -103,6 +103,40 @@ button:disabled {
   margin: 8px 0;
   border: 1px solid var(--line);
 }
+#actions {
+  position: relative;
+}
+#actions button {
+  position: relative;
+}
+#actions button[data-help]::after {
+  content: attr(data-help);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  background: #111;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity .12s ease, transform .12s ease;
+  z-index: 6;
+}
+#actions button[data-help]:hover::after,
+#actions button[data-help]:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
 .ghost {
   background: transparent;
   color: var(--muted);
