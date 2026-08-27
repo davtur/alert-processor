@@ -50,6 +50,7 @@ LOG_TAIL_LINES = int(_env("LOG_TAIL_LINES", "80") or "80")
 TOOL_RESULT_MAX_CHARS = int(_env("TOOL_RESULT_MAX_CHARS", "8000") or "8000")
 TOKEN_TTL_SECONDS = int(_env("TOKEN_TTL_SECONDS", str(24 * 60 * 60)) or str(24 * 60 * 60))
 NOTIFY_COOLDOWN_SECONDS = int(_env("NOTIFY_COOLDOWN_SECONDS", str(3 * 60 * 60)) or str(3 * 60 * 60))
+STALE_RUNNING_SECONDS = int(_env("STALE_RUNNING_SECONDS", str(20 * 60)) or str(20 * 60))
 SESSION_TTL_SECONDS = int(_env("SESSION_TTL_SECONDS", str(30 * 24 * 60 * 60)) or str(30 * 24 * 60 * 60))
 
 ALLOWED_ACTION_TYPES = frozenset(

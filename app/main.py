@@ -103,12 +103,28 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return f"{labels.get('alertname', 'alert')}/{labels.get('namespace', '')}"
 
 
-def _cooldown_active(incident: dict[str, Any]) -> bool:
-    last = db.parse_iso(incident.get("last_notified_at"))
-    if not last:
+def _age_seconds(ts: str | None) -> float | None:
+    parsed = db.parse_iso(ts)
+    if not parsed:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds()
+
+
+def _should_analyze(incident: dict[str, Any]) -> bool:
+    rec = incident.get("recommendation") or {}
+    if not rec:
+        return True
+    status = str(rec.get("investigation_status") or "")
+    age = _age_seconds(incident.get("updated_at"))
+    if status == "running":
+        if age is None or age > config.STALE_RUNNING_SECONDS:
+            return True
+        log.info("skipping analysis for incident %s; investigation already running", incident.get("id"))
         return False
-    age = datetime.now(timezone.utc) - last
-    return age.total_seconds() < config.NOTIFY_COOLDOWN_SECONDS
+    log.info("skipping analysis for incident %s; recommendation already exists", incident.get("id"))
+    return False
 
 
 def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
@@ -126,6 +142,7 @@ def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     am_status = str(payload.get("status") or "firing").lower()
     incident_status = "resolved" if am_status == "resolved" else "firing"
 
+    existing = db.get_by_fingerprint(fingerprint)
     incident = db.upsert_incident(
         fingerprint=fingerprint,
         group_key=str(payload.get("groupKey") or fingerprint),
@@ -140,10 +157,8 @@ def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     if incident_status == "resolved":
         return {"status": "resolved", "id": incident["id"]}
 
-    if incident.get("recommendation") and _cooldown_active(incident):
-        status = (incident.get("recommendation") or {}).get("investigation_status")
-        if status != "running":
-            return {"status": "deduplicated", "id": incident["id"]}
+    if existing and not _should_analyze(existing):
+        return {"status": "deduplicated", "id": incident["id"]}
 
     placeholder = grok._normalize(
         {

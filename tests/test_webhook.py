@@ -102,3 +102,33 @@ class WebhookTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         rec = res.json().get("recommendation") or {}
         self.assertIn(rec.get("investigation_status"), ("running", "done"))
+
+    def test_repeat_webhook_does_not_reanalyze(self):
+        client = TestClient(app)
+        payload = {
+            "status": "firing",
+            "groupKey": "{}:{alertname=RepeatWebhook}",
+            "commonLabels": {
+                "alertname": "RepeatWebhook",
+                "namespace": "alert-processor",
+                "severity": "warning",
+            },
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {
+                        "alertname": "RepeatWebhook",
+                        "namespace": "alert-processor",
+                        "severity": "warning",
+                    },
+                    "fingerprint": "repeat-webhook",
+                }
+            ],
+        }
+        first = client.post("/api/v1/webhook", json=payload)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["status"], "accepted")
+        second = client.post("/api/v1/webhook", json=payload)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["status"], "deduplicated")
+        self.assertEqual(second.json()["id"], first.json()["id"])
