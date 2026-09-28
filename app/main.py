@@ -15,12 +15,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.responses import Response
 
 from app import catalog, config, db, github_pr, grok, k8s, mailer, priority, tokens
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("alert-processor")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+_VERSIONED_STATIC_ASSETS = ("app.js", "styles.css", "manifest.json")
 SESSION_COOKIE = "ap_session"
 _analyze_lock = threading.Lock()
 _analyzing: set[int] = set()
@@ -561,9 +563,36 @@ def token_post(token: str) -> HTMLResponse:
     return HTMLResponse(_token_page(token, payload=payload, result=result))
 
 
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+def _static_asset_version() -> str:
+    mtimes = [
+        (STATIC_DIR / name).stat().st_mtime
+        for name in _VERSIONED_STATIC_ASSETS
+        if (STATIC_DIR / name).is_file()
+    ]
+    return str(int(max(mtimes))) if mtimes else "0"
+
+
+def _versioned_index_html() -> str:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    token = _static_asset_version()
+    for name in _VERSIONED_STATIC_ASSETS:
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={token}")
+    return html
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse(
+        _versioned_index_html(),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")

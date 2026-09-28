@@ -37,6 +37,22 @@ class WebhookTests(unittest.TestCase):
         client = TestClient(app)
         self.assertEqual(client.get("/healthz").json(), {"status": "ok"})
 
+    def test_index_cache_bust(self):
+        client = TestClient(app)
+        res = client.get("/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers.get("cache-control"), "no-cache")
+        html = res.text
+        self.assertIn("app.js?v=", html)
+        self.assertIn("styles.css?v=", html)
+        app_token = html.split("app.js?v=")[1].split('"')[0].split("'")[0]
+        css_token = html.split("styles.css?v=")[1].split('"')[0].split("'")[0]
+        self.assertEqual(app_token, css_token)
+        self.assertTrue(app_token.isdigit())
+        static = client.get("/static/app.js")
+        self.assertEqual(static.status_code, 200)
+        self.assertEqual(static.headers.get("cache-control"), "no-cache")
+
     def test_readyz(self):
         client = TestClient(app)
         self.assertEqual(client.get("/readyz").json(), {"status": "ok"})
