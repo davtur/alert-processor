@@ -2,6 +2,10 @@ const app = document.getElementById("app");
 const logoutBtn = document.getElementById("logoutBtn");
 const userLabel = document.getElementById("userLabel");
 const clusterLabel = document.getElementById("clusterLabel");
+const modelSwitch = document.getElementById("modelSwitch");
+const modelSelect = document.getElementById("modelSelect");
+let modelsState = { selected: "", models: [] };
+let modelsSignature = "";
 let filter = "firing";
 let selectedId = null;
 let logoutUrl = "";
@@ -15,6 +19,45 @@ document.querySelectorAll(".tabs button").forEach((btn) => {
     render();
   });
 });
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function modelLabel() {
+  const current = (modelsState.models || []).find((model) => model.id === modelsState.selected);
+  return current ? current.label : "the model";
+}
+
+modelSelect.addEventListener("change", async () => {
+  const id = modelSelect.value;
+  try {
+    modelsState = await api("/api/v1/models", { method: "POST", body: JSON.stringify({ id }) });
+  } catch (err) {
+    modelSelect.value = modelsState.selected || "";
+    app.insertAdjacentHTML("afterbegin", `<section class="card"><p class="err">${escapeHtml(err.message)}</p></section>`);
+  }
+});
+
+async function loadModels() {
+  const data = await api("/api/v1/models");
+  const models = data.models || [];
+  const signature = models.map((model) => `${model.id}:${model.label}`).join("|");
+  if (signature !== modelsSignature) {
+    modelSelect.innerHTML = models
+      .map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.label)}</option>`)
+      .join("");
+    modelsSignature = signature;
+  }
+  if (document.activeElement !== modelSelect) modelSelect.value = data.selected || "";
+  modelsState = data;
+  modelSelect.disabled = models.length < 2;
+  modelSwitch.hidden = models.length === 0;
+}
 
 logoutBtn.addEventListener("click", async () => {
   const dest = logoutUrl;
@@ -135,7 +178,7 @@ function detailView(item) {
     ? `<ol class="steps">${steps.map((s) => `<li>${s}</li>`).join("")}</ol>`
     : investigating
       ? `<p class="muted">Waiting for the read-only investigation to finish.</p>`
-      : `<p class="muted">No step list yet. Tap Ask Grok again to refresh the recommendation.</p>`;
+      : `<p class="muted">No step list yet. Tap Ask ${escapeHtml(modelLabel())} again to refresh the recommendation.</p>`;
   const targetTxt = [target.kind, target.namespace && target.name ? `${target.namespace}/${target.name}` : target.name, target.replicas != null ? `replicas=${target.replicas}` : ""]
     .filter(Boolean)
     .join(" ");
@@ -157,7 +200,7 @@ function detailView(item) {
         : ""
     }
     <section class="card">
-      <p class="eyebrow">Grok recommendation</p>
+      <p class="eyebrow">${escapeHtml(rec.model_label || modelLabel())} recommendation</p>
       <p><strong>${rec.summary || "No summary"}</strong></p>
       <p>${rec.root_cause || ""}</p>
       ${findings ? `<p class="eyebrow" style="margin-top:16px">Investigation</p><pre class="findings">${findings}</pre>` : ""}
@@ -180,10 +223,10 @@ function detailView(item) {
   if (["firing", "acknowledged", "resolved"].includes(item.status)) {
     const actions = document.getElementById("actions");
     actions.innerHTML = `
-      <button class="primary" id="approveBtn" data-help="Runs Grok's recommended runtime action (restart, delete pod, or scale) if there is one, and opens a GitOps PR when YAML was proposed. Nothing is merged or oc applied automatically.">Approve executable action</button>
+      <button class="primary" id="approveBtn" data-help="Runs the recommended runtime action (restart, delete pod, or scale) if there is one, and opens a GitOps PR when YAML was proposed. Nothing is merged or applied automatically.">Approve executable action</button>
       <button class="secondary" id="rejectBtn" data-help="Records that you declined this recommendation. No cluster change and no new pull request.">Reject</button>
       <button class="secondary" id="ackBtn" data-help="Marks the alert as seen and leaves the cluster unchanged. Use this when you will fix it yourself or no whitelist action is safe.">Acknowledge only</button>
-      <button class="secondary" id="reanalyzeBtn"${investigating ? " disabled" : ""} data-help="${investigating ? "Grok is already investigating this alert. Wait for it to finish." : "Runs a new read-only investigation and replaces this recommendation. Uses xAI credits."}">${investigating ? "Asking Grok…" : "Ask Grok again"}</button>
+      <button class="secondary" id="reanalyzeBtn"${investigating ? " disabled" : ""} data-help="${investigating ? `${escapeHtml(modelLabel())} is already investigating this alert. Wait for it to finish.` : `Runs a new read-only investigation with ${escapeHtml(modelLabel())} and replaces this recommendation.`}">${investigating ? `Asking ${escapeHtml(modelLabel())}…` : `Ask ${escapeHtml(modelLabel())} again`}</button>
       <p id="actionErr" class="err"></p>`;
     const run = (path) => async () => {
       try {
@@ -200,7 +243,7 @@ function detailView(item) {
     document.getElementById("reanalyzeBtn").onclick = async () => {
       const btn = document.getElementById("reanalyzeBtn");
       btn.disabled = true;
-      btn.textContent = "Asking Grok…";
+      btn.textContent = `Asking ${modelLabel()}…`;
       try {
         await api(`/api/v1/incidents/${item.id}/reanalyze`, { method: "POST", body: "{}" });
         selectedId = item.id;
@@ -208,7 +251,7 @@ function detailView(item) {
       } catch (err) {
         document.getElementById("actionErr").textContent = err.message;
         btn.disabled = false;
-        btn.textContent = "Ask Grok again";
+        btn.textContent = `Ask ${modelLabel()} again`;
       }
     };
   }
@@ -226,10 +269,12 @@ async function render() {
     if (!session.authenticated) {
       logoutBtn.hidden = true;
       userLabel.hidden = true;
+      modelSwitch.hidden = true;
       logoutUrl = "";
       loginForm();
       return;
     }
+    await loadModels();
     logoutBtn.hidden = false;
     logoutUrl = session.logout_url || "";
     if (session.user) {
@@ -253,6 +298,7 @@ async function render() {
     cardList(byPriority(items));
   } catch (err) {
     if (err.message === "auth") {
+      modelSwitch.hidden = true;
       loginForm();
       return;
     }

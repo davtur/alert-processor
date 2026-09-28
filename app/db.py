@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_updated ON incidents(updated_at);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 _POSTGRES_DDL = """
@@ -80,6 +84,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_updated ON incidents(updated_at);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -336,6 +344,28 @@ def set_status(incident_id: int, status: str, action_result: str | None = None) 
                     ),
                     (status, action_result, _now(), incident_id),
                 )
+
+
+def get_setting(key: str) -> str | None:
+    with _conn() as conn:
+        row = conn.execute(_q("SELECT value FROM settings WHERE key = %s"), (key,)).fetchone()
+    if row is None:
+        return None
+    return str(row["value"])
+
+
+def set_setting(key: str, value: str) -> None:
+    with _write_lock():
+        with _conn() as conn:
+            conn.execute(
+                _q(
+                    """
+                    INSERT INTO settings (key, value) VALUES (%s, %s)
+                    ON CONFLICT (key) DO UPDATE SET value = excluded.value
+                    """
+                ),
+                (key, value),
+            )
 
 
 def add_audit(incident_id: int | None, action: str, actor: str, detail: str = "") -> None:

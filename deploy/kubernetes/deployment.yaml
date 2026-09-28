@@ -29,6 +29,9 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          env:
+            - name: MODELS_FILE
+              value: /etc/alert-processor/models.yaml
           envFrom:
             - configMapRef:
                 name: alert-processor
@@ -64,6 +67,12 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: models
+              mountPath: /etc/alert-processor
+              readOnly: true
       volumes:
         - name: data
           emptyDir: {}
+        - name: models
+          configMap:
+            name: alert-processor-models

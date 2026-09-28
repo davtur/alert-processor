@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import config, db, github_pr, grok, k8s, mailer, priority, tokens
+from app import catalog, config, db, github_pr, grok, k8s, mailer, priority, tokens
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("alert-processor")
@@ -46,6 +46,10 @@ app = FastAPI(title="alert-processor", version="1.0.0", lifespan=lifespan)
 
 class LoginBody(BaseModel):
     password: str = ""
+
+
+class SelectModelBody(BaseModel):
+    id: str = ""
 
 
 class AlertmanagerWebhook(BaseModel):
@@ -136,6 +140,27 @@ def _should_analyze(incident: dict[str, Any]) -> bool:
     return False
 
 
+def _investigating_placeholder(**extra: Any) -> dict[str, Any]:
+    try:
+        spec = catalog.selected()
+        label = spec.label
+        model_id = spec.id
+    except catalog.CatalogError:
+        label = "The model"
+        model_id = ""
+    body: dict[str, Any] = {
+        "summary": f"{label} is investigating the cluster (read-only).",
+        "root_cause": "Investigation in progress",
+        "how_to_resolve": [],
+        "action_type": "acknowledge",
+        "investigation_status": "running",
+        "model_id": model_id,
+        "model_label": label if model_id else "",
+    }
+    body.update(extra)
+    return grok._normalize(body)
+
+
 def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     if _should_skip(payload):
         return {"status": "skipped", "reason": "ignored alertname"}
@@ -169,15 +194,7 @@ def _process_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     if existing and not _should_analyze(existing):
         return {"status": "deduplicated", "id": incident["id"]}
 
-    placeholder = grok._normalize(
-        {
-            "summary": "Grok is investigating the cluster (read-only).",
-            "root_cause": "Investigation in progress",
-            "how_to_resolve": [],
-            "action_type": "acknowledge",
-            "investigation_status": "running",
-        }
-    )
+    placeholder = _investigating_placeholder()
     db.save_recommendation(incident["id"], placeholder)
     _start_analysis(incident["id"], payload, namespace)
     return {"status": "accepted", "id": incident["id"]}
@@ -197,8 +214,9 @@ def _start_analysis(incident_id: int, payload: dict[str, Any], namespace: str, n
             if incident:
                 recommendation = _open_yaml_pr(incident, recommendation)
             log.info(
-                "incident %s grok action=%s pr=%s: %s",
+                "incident %s model=%s action=%s pr=%s: %s",
                 incident_id,
+                recommendation.get("model_label") or recommendation.get("model_id") or "-",
                 recommendation.get("action_type"),
                 recommendation.get("pr_url") or recommendation.get("pr_error") or "-",
                 recommendation.get("summary"),
@@ -365,6 +383,27 @@ def session(request: Request) -> dict[str, Any]:
     }
 
 
+@app.get("/api/v1/models")
+def api_models(request: Request) -> dict[str, Any]:
+    _require_session(request)
+    try:
+        return catalog.public_state()
+    except catalog.CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/models")
+def api_select_model(request: Request, body: SelectModelBody) -> dict[str, Any]:
+    _require_session(request)
+    model_id = body.id.strip()
+    try:
+        catalog.select(model_id)
+    except catalog.CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.add_audit(None, "select_model", _actor(request, "ui"), model_id)
+    return catalog.public_state()
+
+
 @app.get("/api/v1/incidents")
 def incidents(request: Request, status: str | None = None) -> dict[str, Any]:
     _require_session(request)
@@ -413,16 +452,9 @@ def api_reanalyze(request: Request, incident_id: int) -> dict[str, Any]:
     payload = item.get("payload") or {}
     namespace = str(item.get("namespace") or "")
     existing = item.get("recommendation") or {}
-    placeholder = grok._normalize(
-        {
-            "summary": "Grok is investigating the cluster (read-only).",
-            "root_cause": "Investigation in progress",
-            "how_to_resolve": [],
-            "action_type": "acknowledge",
-            "investigation_status": "running",
-            "pr_url": existing.get("pr_url") or "",
-            "pr_error": existing.get("pr_error") or "",
-        }
+    placeholder = _investigating_placeholder(
+        pr_url=existing.get("pr_url") or "",
+        pr_error=existing.get("pr_error") or "",
     )
     db.save_recommendation(incident_id, placeholder)
     db.add_audit(incident_id, "reanalyze", _actor(request, "ui"), "queued")

@@ -77,7 +77,8 @@ def send_recommendation(incident: dict[str, Any], rec: dict[str, Any]) -> bool:
     approve = f"{config.PUBLIC_BASE_URL}/t/{tokens.make_action_token(incident_id, 'approve')}"
     reject = f"{config.PUBLIC_BASE_URL}/t/{tokens.make_action_token(incident_id, 'reject')}"
     alertname = incident.get("alertname") or "alert"
-    subject = f"[FIRING] {alertname} — Grok recommendation needs approval"
+    label = str(rec.get("model_label") or "Model")
+    subject = f"[FIRING] {alertname} — {label} recommendation needs approval"
     html = _html(incident, rec, approve, reject)
     lines = [
         str(alertname),

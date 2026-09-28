@@ -4,6 +4,8 @@
 
 Edit `kubernetes/configmap.yaml` before you apply it. `PUBLIC_BASE_URL`, `GITHUB_REPO`, and `CLUSTER_NAME` are placeholders.
 
+The model menu reads [`models.example.yaml`](kubernetes/models.example.yaml), mounted as `MODELS_FILE`. Replace that file with your own catalog. The example deployment does not contain a real cluster endpoint.
+
 The container image in the Deployment is `alert-processor:local`. Build it with:
 
 ```bash

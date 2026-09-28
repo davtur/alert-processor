@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Callable
 
-from app import config, k8s
+from app import catalog, k8s
 
 log = logging.getLogger("alert-processor.investigate")
 
@@ -121,8 +121,9 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         log.warning("tool %s failed: %s", name, exc)
         return json.dumps({"error": str(exc)})
     blob = json.dumps(result, default=str)
-    if len(blob) > config.TOOL_RESULT_MAX_CHARS:
-        blob = blob[: config.TOOL_RESULT_MAX_CHARS] + '..."}'
+    limit = catalog.tool_result_max_chars()
+    if len(blob) > limit:
+        blob = blob[:limit] + '..."}'
     return blob
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The inbox can switch chat models. The catalog is a YAML file (`MODELS_FILE`); the selected model is stored in the database.
+
 ## 1.0.0 - 2026-09-28
 
 First release intended for other clusters.

@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from app import config
+from app import catalog, config
 
 log = logging.getLogger("alert-processor.k8s")
 
@@ -198,7 +198,7 @@ def inspect_logs(namespace: str, name: str, container: str = "", previous: bool 
         "pod": name,
         "container": container or None,
         "previous": previous,
-        "log": (text or "")[-config.TOOL_RESULT_MAX_CHARS :],
+        "log": (text or "")[-catalog.tool_result_max_chars() :],
     }
 
 

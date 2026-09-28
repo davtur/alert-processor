@@ -1,0 +1,22 @@
+# Example model catalog. Copy this shape into your own ConfigMap.
+# The app reads the file at MODELS_FILE. API keys stay in the environment;
+# apiKeyEnv is the variable name, not the secret.
+#
+# The model chosen in the inbox is stored by the app. default marks which
+# entry is used until somebody picks another.
+models:
+  - id: grok
+    label: Grok
+    model: grok-4-1-fast-non-reasoning
+    apiUrl: https://api.x.ai/v1/chat/completions
+    apiKeyEnv: XAI_API_KEY
+    default: true
+  - id: local
+    label: Local model
+    model: your-served-model-id
+    apiUrl: http://model.models.svc.cluster.local/v1/chat/completions
+    # Omit apiKeyEnv when the endpoint does not require a bearer token.
+    # toolResultMaxChars: 1500
+    # extraBody:
+    #   chat_template_kwargs:
+    #     enable_thinking: false

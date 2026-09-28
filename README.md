@@ -69,8 +69,9 @@ Copy [`.env.example`](.env.example). Values below are the ones you will actually
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `XAI_API_KEY` | for recommendations | xAI API key |
-| `XAI_MODEL` | no | default `grok-4-1-fast-non-reasoning` |
+| `MODELS_FILE` | no | YAML catalog of chat models. Empty uses one Grok model from `XAI_API_KEY`, `XAI_MODEL`, and `XAI_API_URL` |
+| `XAI_API_KEY` | for the env fallback | xAI API key. A catalog entry can name this variable with `apiKeyEnv` |
+| `XAI_MODEL` | no | Model name used only when `MODELS_FILE` is unset. Default `grok-4-1-fast-non-reasoning` |
 | `AUTH_PASSWORD` | for local login | Shared inbox password. Not used when a proxy sets `X-Forwarded-User` |
 | `SIGNING_SECRET` | yes, outside local dev | HMAC secret for email links and session cookies. Falls back to `AUTH_PASSWORD`, then a development default |
 | `PUBLIC_BASE_URL` | yes | Origin used in email links, no path. `https` turns on the Secure cookie flag |
@@ -91,6 +92,24 @@ Copy [`.env.example`](.env.example). Values below are the ones you will actually
 | `SKIP_ALERTNAMES` | no | Default `Watchdog,InfoInhibitor` |
 
 More than one replica requires `DATABASE_URL`. SQLite on an `emptyDir` is only safe at one replica.
+
+## Models
+
+The inbox has a model menu when the catalog lists more than one entry. The choice is stored in the database and shared by every replica. The catalog itself is a file, not something the UI can edit.
+
+```yaml
+models:
+  - id: grok
+    label: Grok
+    model: grok-4-1-fast-non-reasoning
+    apiUrl: https://api.x.ai/v1/chat/completions
+    apiKeyEnv: XAI_API_KEY
+    default: true
+```
+
+`apiUrl` is the chat-completions endpoint. `apiKeyEnv` is an environment variable that holds the bearer token; leave it out when the endpoint does not need one. `default` is the model used until someone picks another. Optional `toolResultMaxChars` shortens tool output for models with a small context window. Optional `extraBody` is merged into each request.
+
+A placeholder file is [`deploy/kubernetes/models.example.yaml`](deploy/kubernetes/models.example.yaml). Put the real catalog in your GitOps repo and mount it at `MODELS_FILE`.
 
 ## What approval is allowed to do
 

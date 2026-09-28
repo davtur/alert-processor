@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from app import config
+from app import catalog, config
 
 log = logging.getLogger("alert-processor.grok")
 
@@ -121,6 +121,8 @@ def _normalize(rec: dict[str, Any]) -> dict[str, Any]:
         "investigation_status": str(rec.get("investigation_status") or "done"),
         "pr_url": str(rec.get("pr_url") or ""),
         "pr_error": str(rec.get("pr_error") or ""),
+        "model_id": str(rec.get("model_id") or ""),
+        "model_label": str(rec.get("model_label") or ""),
     }
 
 
@@ -169,11 +171,31 @@ def approval_effect(rec: dict[str, Any]) -> str:
     )
 
 
-def _headers() -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {config.XAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    content = message.get("content") or ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text") or ""))
+            else:
+                parts.append(str(part))
+        content = "".join(parts)
+    text = _THINK.sub("", str(content)).strip()
+    if text:
+        return text
+    reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+    return _THINK.sub("", str(reasoning)).strip()
+
+
+def _headers(spec: catalog.ModelSpec) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if spec.api_key:
+        headers["Authorization"] = f"Bearer {spec.api_key}"
+    return headers
 
 
 CHAT_TIMEOUT = httpx.Timeout(180.0, connect=15.0)
@@ -203,36 +225,45 @@ def _sanitize_assistant(message: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _chat(client: httpx.Client, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "model": config.XAI_MODEL,
-        "temperature": 0.2,
-        "messages": messages,
-    }
+def _chat(
+    client: httpx.Client,
+    spec: catalog.ModelSpec,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = dict(spec.extra_body)
+    body["model"] = spec.model
+    body["temperature"] = body.get("temperature", 0.2)
+    body["messages"] = messages
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
     last_error: Exception | None = None
     for attempt in range(1, 4):
         try:
-            response = client.post(config.XAI_API_URL, headers=_headers(), json=body)
+            response = client.post(spec.api_url, headers=_headers(spec), json=body)
             if response.status_code >= 400:
                 detail = (response.text or "")[:1500]
-                log.error("xAI HTTP %s: %s", response.status_code, detail)
+                log.error("%s HTTP %s: %s", spec.label, response.status_code, detail)
                 raise httpx.HTTPStatusError(
-                    f"xAI HTTP {response.status_code}: {detail}",
+                    f"{spec.label} HTTP {response.status_code}: {detail}",
                     request=response.request,
                     response=response,
                 )
             return response.json()["choices"][0]["message"]
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             last_error = exc
-            log.warning("xAI attempt %s/3 failed: %s", attempt, exc)
+            log.warning("%s attempt %s/3 failed: %s", spec.label, attempt, exc)
             time.sleep(1.5 * attempt)
-    raise last_error or RuntimeError("xAI chat failed")
+    raise last_error or RuntimeError(f"{spec.label} chat failed")
 
 
-def _investigate(client: httpx.Client, payload: dict[str, Any], cluster_context: str) -> str:
+def _investigate(
+    client: httpx.Client,
+    spec: catalog.ModelSpec,
+    payload: dict[str, Any],
+    cluster_context: str,
+) -> str:
     from app.investigate import TOOLS, run_tool, tool_calls_from_message
 
     messages: list[dict[str, Any]] = [
@@ -247,10 +278,10 @@ def _investigate(client: httpx.Client, payload: dict[str, Any], cluster_context:
     ]
     findings = ""
     for round_n in range(config.MAX_INVESTIGATE_ROUNDS):
-        message = _chat(client, messages, TOOLS)
+        message = _chat(client, spec, messages, TOOLS)
         calls = tool_calls_from_message(message)
         if not calls:
-            findings = (message.get("content") or "").strip()
+            findings = _message_text(message)
             log.info("Investigation finished after %s rounds (%s chars)", round_n + 1, len(findings))
             break
         messages.append(_sanitize_assistant(message))
@@ -276,22 +307,46 @@ def _investigate(client: httpx.Client, payload: dict[str, Any], cluster_context:
     return findings or "No investigation findings."
 
 
+def _with_model(rec: dict[str, Any], spec: catalog.ModelSpec) -> dict[str, Any]:
+    rec["model_id"] = spec.id
+    rec["model_label"] = spec.label
+    return rec
+
+
 def recommend(payload: dict[str, Any], cluster_context: str = "") -> dict[str, Any]:
-    if not config.XAI_API_KEY:
-        log.warning("XAI_API_KEY is not set; returning acknowledge")
+    try:
+        spec = catalog.selected()
+    except catalog.CatalogError as exc:
+        log.error("model catalog: %s", exc)
         return _normalize(
             {
-                "summary": "Grok API key is not configured.",
-                "root_cause": "Missing XAI_API_KEY",
+                "summary": f"Model catalog is invalid: {exc}",
+                "root_cause": "Configuration error",
                 "risk": "low",
                 "action_type": "acknowledge",
                 "investigation_status": "done",
             }
         )
 
+    if spec.api_key_env and not spec.api_key:
+        log.warning("%s api key %s is not set; returning acknowledge", spec.label, spec.api_key_env)
+        return _normalize(
+            _with_model(
+                {
+                    "summary": f"{spec.label} API key is not configured ({spec.api_key_env}).",
+                    "root_cause": f"Missing {spec.api_key_env}",
+                    "risk": "low",
+                    "action_type": "acknowledge",
+                    "investigation_status": "done",
+                },
+                spec,
+            )
+        )
+
+    limit = catalog.push_tool_limit(spec.tool_result_max_chars)
     try:
         with httpx.Client(timeout=CHAT_TIMEOUT) as client:
-            findings = _investigate(client, payload, cluster_context)
+            findings = _investigate(client, spec, payload, cluster_context)
             conclude_messages = [
                 {"role": "system", "content": system_prompt()},
                 {
@@ -305,13 +360,15 @@ def recommend(payload: dict[str, Any], cluster_context: str = "") -> dict[str, A
                     ),
                 },
             ]
-            message = _chat(client, conclude_messages)
-            content = message.get("content") or ""
+            message = _chat(client, spec, conclude_messages)
+            content = _message_text(message)
             rec = _normalize(_extract_json(content))
             rec["investigation"] = findings
             rec["investigation_status"] = "done"
+            rec = _with_model(rec, spec)
             log.info(
-                "Grok recommendation action=%s risk=%s summary=%s how_to_resolve=%s rec=%s",
+                "%s recommendation action=%s risk=%s summary=%s how_to_resolve=%s rec=%s",
+                spec.label,
                 rec.get("action_type"),
                 rec.get("risk"),
                 rec.get("summary"),
@@ -320,16 +377,21 @@ def recommend(payload: dict[str, Any], cluster_context: str = "") -> dict[str, A
             )
             return rec
     except Exception as exc:
-        log.exception("Grok recommendation failed")
+        log.exception("%s recommendation failed", spec.label)
         detail = str(exc).replace("\n", " ")
         if len(detail) > 400:
             detail = detail[:400] + "…"
         return _normalize(
-            {
-                "summary": f"Grok call failed: {detail}",
-                "root_cause": "LLM error",
-                "risk": "low",
-                "action_type": "acknowledge",
-                "investigation_status": "done",
-            }
+            _with_model(
+                {
+                    "summary": f"{spec.label} call failed: {detail}",
+                    "root_cause": "LLM error",
+                    "risk": "low",
+                    "action_type": "acknowledge",
+                    "investigation_status": "done",
+                },
+                spec,
+            )
         )
+    finally:
+        catalog.pop_tool_limit(limit)
