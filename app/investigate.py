@@ -94,6 +94,81 @@ TOOLS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_argocd_application",
+            "description": (
+                "Get one Argo CD Application: sync/health, source path, conditions, "
+                "and resources that are not Synced or not Healthy."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "namespace": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+                "required": ["namespace", "name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_argocd_applications",
+            "description": (
+                "List Argo CD Applications with sync and health only. "
+                "Optional namespace; omit to list cluster-wide."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"namespace": {"type": "string"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cluster_operator",
+            "description": (
+                "Get an OpenShift ClusterOperator's conditions, or list operators that are "
+                "not Available / are Degraded or Progressing when name is omitted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_machine_config_pool",
+            "description": (
+                "Get a MachineConfigPool (machine counts and conditions), or list all pools "
+                "when name is omitted. Use for node update / MCP alerts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_job",
+            "description": "Get a Job's succeeded/failed/active counts, completion time, and conditions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "namespace": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+                "required": ["namespace", "name"],
+            },
+        },
+    },
 ]
 
 _HANDLERS: dict[str, Callable[..., Any]] = {
@@ -108,6 +183,11 @@ _HANDLERS: dict[str, Callable[..., Any]] = {
     "list_events": lambda **a: k8s.inspect_events(a["namespace"], a.get("name") or ""),
     "get_workload": lambda **a: k8s.inspect_workload(a["namespace"], a["kind"], a["name"]),
     "list_nodes": lambda **a: k8s.inspect_nodes(),
+    "get_argocd_application": lambda **a: k8s.inspect_argocd_application(a["namespace"], a["name"]),
+    "list_argocd_applications": lambda **a: k8s.list_argocd_applications(a.get("namespace") or ""),
+    "get_cluster_operator": lambda **a: k8s.inspect_cluster_operator(a.get("name") or ""),
+    "get_machine_config_pool": lambda **a: k8s.inspect_machine_config_pool(a.get("name") or ""),
+    "get_job": lambda **a: k8s.inspect_job(a["namespace"], a["name"]),
 }
 
 

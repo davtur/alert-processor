@@ -23,7 +23,7 @@ def investigate_prompt() -> str:
 You have READ-ONLY cluster tools. Use them to find the actual root cause before concluding.
 Do not suggest executing mutations via tools — there are none. Do not invent resource names.
 Typical sequence: list_workloads in the alert namespace, list_events, get_pod / get_logs for crashlooping containers, get_workload for the owner, list_nodes if this looks like GPU/node pressure.
-If the alert is about Argo CD Application sync or health and these tools cannot show Application status, say so after at most a couple of checks and stop calling tools.
+For Argo CD Application sync or health alerts, call get_argocd_application (or list_argocd_applications first if the name is unclear), then stop. For ClusterOperator alerts call get_cluster_operator; for node update / MachineConfigPool alerts call get_machine_config_pool; for Job alerts call get_job.
 When you have enough evidence, stop calling tools and write a concise findings report covering:
 - what is broken
 - evidence (pod names, log lines, events)
@@ -293,9 +293,9 @@ def force_findings_user_message() -> str:
     return (
         "Stop calling tools. You have no more investigation tool rounds. "
         "Write the findings report from the conversation so far covering: "
-        "what is broken; evidence (pod names, log lines, events); likely root cause; "
-        "whether a restart would only mask it; and a permanent GitOps fix path if any. "
-        "If tools could not see Argo CD Application sync/health status, say so explicitly."
+        "what is broken; evidence (pod names, log lines, events, Argo CD sync/health, "
+        "operator or job conditions); likely root cause; "
+        "whether a restart would only mask it; and a permanent GitOps fix path if any."
     )
 
 

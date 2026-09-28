@@ -226,6 +226,66 @@ class InvestigateToolTests(unittest.TestCase):
         out = json.loads(run_tool("list_workloads", {"namespace": "Not Valid"}))
         self.assertIn("error", out)
 
+    def test_tools_include_openshift_read_tools(self):
+        from app.investigate import TOOLS
+
+        names = {t["function"]["name"] for t in TOOLS}
+        for name in (
+            "get_argocd_application",
+            "list_argocd_applications",
+            "get_cluster_operator",
+            "get_machine_config_pool",
+            "get_job",
+        ):
+            self.assertIn(name, names)
+
+    def test_get_argocd_application_rejects_invalid_without_api(self):
+        from unittest import mock
+        from app.investigate import run_tool
+
+        with mock.patch("app.k8s._client") as client:
+            out = json.loads(
+                run_tool("get_argocd_application", {"namespace": "Not Valid", "name": "app"})
+            )
+            self.assertIn("error", out)
+            client.assert_not_called()
+
+        with mock.patch("app.k8s._client") as client:
+            out = json.loads(
+                run_tool("get_argocd_application", {"namespace": "openshift-gitops", "name": "Bad_Name"})
+            )
+            self.assertIn("error", out)
+            client.assert_not_called()
+
+    def test_get_job_rejects_invalid_without_api(self):
+        from unittest import mock
+        from app.investigate import run_tool
+
+        with mock.patch("app.k8s._client") as client:
+            out = json.loads(run_tool("get_job", {"namespace": "Bad NS", "name": "job"}))
+            self.assertIn("error", out)
+            client.assert_not_called()
+
+        with mock.patch("app.k8s._client") as client:
+            out = json.loads(run_tool("get_job", {"namespace": "default", "name": "Not_Valid"}))
+            self.assertIn("error", out)
+            client.assert_not_called()
+
+    def test_investigate_prompt_mentions_new_tools(self):
+        from app import config
+
+        previous = config.CLUSTER_NAME
+        config.CLUSTER_NAME = "lab"
+        try:
+            text = grok.investigate_prompt()
+            self.assertIn("get_argocd_application", text)
+            self.assertIn("get_cluster_operator", text)
+            self.assertIn("get_machine_config_pool", text)
+            self.assertIn("get_job", text)
+            self.assertNotIn("cannot show Application status", text)
+        finally:
+            config.CLUSTER_NAME = previous
+
 
 class InvestigateLimitFindingsTests(unittest.TestCase):
     def test_finalize_prefers_writeup(self):

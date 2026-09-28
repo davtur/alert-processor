@@ -299,6 +299,250 @@ def inspect_nodes() -> dict[str, Any]:
     return {"nodes": items}
 
 
+def _truncate(value: Any, limit: int = 200) -> str:
+    return str(value or "")[:limit]
+
+
+def _condition_summary(conditions: list[Any] | None, message_limit: int = 200) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for c in conditions or []:
+        if isinstance(c, dict):
+            items.append(
+                {
+                    "type": str(c.get("type") or ""),
+                    "status": str(c.get("status") or ""),
+                    "reason": str(c.get("reason") or ""),
+                    "message": _truncate(c.get("message"), message_limit),
+                }
+            )
+        else:
+            items.append(
+                {
+                    "type": str(getattr(c, "type", "") or ""),
+                    "status": str(getattr(c, "status", "") or ""),
+                    "reason": str(getattr(c, "reason", "") or ""),
+                    "message": _truncate(getattr(c, "message", ""), message_limit),
+                }
+            )
+    return items
+
+
+def _argocd_source_summary(spec: dict[str, Any]) -> dict[str, str]:
+    source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
+    if not source:
+        sources = spec.get("sources")
+        if isinstance(sources, list) and sources and isinstance(sources[0], dict):
+            source = sources[0]
+    return {
+        "repoURL": str(source.get("repoURL") or ""),
+        "path": str(source.get("path") or ""),
+        "targetRevision": str(source.get("targetRevision") or ""),
+    }
+
+
+def inspect_argocd_application(namespace: str, name: str) -> dict[str, Any]:
+    if not valid_name(namespace) or not valid_name(name):
+        raise ActionError("invalid namespace or name")
+    client = _client()
+    custom = client.CustomObjectsApi()
+    obj = custom.get_namespaced_custom_object(
+        group="argoproj.io",
+        version="v1alpha1",
+        namespace=namespace,
+        plural="applications",
+        name=name,
+    )
+    spec = obj.get("spec") if isinstance(obj.get("spec"), dict) else {}
+    status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+    sync = status.get("sync") if isinstance(status.get("sync"), dict) else {}
+    health = status.get("health") if isinstance(status.get("health"), dict) else {}
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    source = _argocd_source_summary(spec)
+    problem_resources: list[dict[str, Any]] = []
+    for res in status.get("resources") or []:
+        if not isinstance(res, dict):
+            continue
+        res_sync = str(res.get("status") or "")
+        res_health = res.get("health") if isinstance(res.get("health"), dict) else {}
+        res_health_status = str(res_health.get("status") or "")
+        if res_sync == "Synced" and res_health_status == "Healthy":
+            continue
+        problem_resources.append(
+            {
+                "kind": str(res.get("kind") or ""),
+                "namespace": str(res.get("namespace") or ""),
+                "name": str(res.get("name") or ""),
+                "status": res_sync,
+                "health": res_health_status or None,
+            }
+        )
+        if len(problem_resources) >= 15:
+            break
+    return {
+        "name": str(metadata.get("name") or name),
+        "namespace": str(metadata.get("namespace") or namespace),
+        "project": str(spec.get("project") or ""),
+        "repoURL": source["repoURL"],
+        "path": source["path"],
+        "targetRevision": source["targetRevision"],
+        "sync": str(sync.get("status") or ""),
+        "health": str(health.get("status") or ""),
+        "conditions": [
+            {"type": c.get("type", ""), "message": _truncate(c.get("message"), 200)}
+            for c in (status.get("conditions") or [])
+            if isinstance(c, dict)
+        ][:10],
+        "problem_resources": problem_resources,
+    }
+
+
+def list_argocd_applications(namespace: str = "") -> dict[str, Any]:
+    if namespace and not valid_name(namespace):
+        raise ActionError("invalid namespace")
+    client = _client()
+    custom = client.CustomObjectsApi()
+    if namespace:
+        result = custom.list_namespaced_custom_object(
+            group="argoproj.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="applications",
+        )
+    else:
+        result = custom.list_cluster_custom_object(
+            group="argoproj.io",
+            version="v1alpha1",
+            plural="applications",
+        )
+    items: list[dict[str, str]] = []
+    for obj in (result.get("items") or [])[:40]:
+        if not isinstance(obj, dict):
+            continue
+        metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+        status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+        sync = status.get("sync") if isinstance(status.get("sync"), dict) else {}
+        health = status.get("health") if isinstance(status.get("health"), dict) else {}
+        items.append(
+            {
+                "namespace": str(metadata.get("namespace") or namespace or ""),
+                "name": str(metadata.get("name") or ""),
+                "sync": str(sync.get("status") or ""),
+                "health": str(health.get("status") or ""),
+            }
+        )
+    return {"applications": items, "count": len(items)}
+
+
+def _cluster_operator_unhealthy(conditions: list[dict[str, Any]]) -> bool:
+    by_type = {str(c.get("type") or ""): c for c in conditions if isinstance(c, dict)}
+    available = by_type.get("Available") or {}
+    degraded = by_type.get("Degraded") or {}
+    progressing = by_type.get("Progressing") or {}
+    if str(available.get("status") or "") != "True":
+        return True
+    if str(degraded.get("status") or "") == "True":
+        return True
+    if str(progressing.get("status") or "") == "True":
+        return True
+    return False
+
+
+def inspect_cluster_operator(name: str = "") -> dict[str, Any]:
+    if name and not valid_name(name):
+        raise ActionError("invalid name")
+    client = _client()
+    custom = client.CustomObjectsApi()
+    if name:
+        obj = custom.get_cluster_custom_object(
+            group="config.openshift.io",
+            version="v1",
+            plural="clusteroperators",
+            name=name,
+        )
+        status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+        metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+        return {
+            "name": str(metadata.get("name") or name),
+            "conditions": _condition_summary(status.get("conditions"), message_limit=200),
+        }
+    result = custom.list_cluster_custom_object(
+        group="config.openshift.io",
+        version="v1",
+        plural="clusteroperators",
+    )
+    items: list[dict[str, Any]] = []
+    for obj in result.get("items") or []:
+        if not isinstance(obj, dict):
+            continue
+        status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+        conditions = [c for c in (status.get("conditions") or []) if isinstance(c, dict)]
+        if not _cluster_operator_unhealthy(conditions):
+            continue
+        metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+        items.append(
+            {
+                "name": str(metadata.get("name") or ""),
+                "conditions": _condition_summary(conditions, message_limit=160),
+            }
+        )
+        if len(items) >= 20:
+            break
+    return {"operators": items, "count": len(items)}
+
+
+def _mcp_summary(obj: dict[str, Any]) -> dict[str, Any]:
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
+    return {
+        "name": str(metadata.get("name") or ""),
+        "machineCount": status.get("machineCount"),
+        "readyMachineCount": status.get("readyMachineCount"),
+        "updatedMachineCount": status.get("updatedMachineCount"),
+        "degradedMachineCount": status.get("degradedMachineCount"),
+        "conditions": _condition_summary(status.get("conditions"), message_limit=200),
+    }
+
+
+def inspect_machine_config_pool(name: str = "") -> dict[str, Any]:
+    if name and not valid_name(name):
+        raise ActionError("invalid name")
+    client = _client()
+    custom = client.CustomObjectsApi()
+    if name:
+        obj = custom.get_cluster_custom_object(
+            group="machineconfiguration.openshift.io",
+            version="v1",
+            plural="machineconfigpools",
+            name=name,
+        )
+        return _mcp_summary(obj)
+    result = custom.list_cluster_custom_object(
+        group="machineconfiguration.openshift.io",
+        version="v1",
+        plural="machineconfigpools",
+    )
+    items = [_mcp_summary(obj) for obj in (result.get("items") or []) if isinstance(obj, dict)]
+    return {"pools": items[:10], "count": min(len(items), 10)}
+
+
+def inspect_job(namespace: str, name: str) -> dict[str, Any]:
+    if not valid_name(namespace) or not valid_name(name):
+        raise ActionError("invalid namespace or name")
+    client = _client()
+    batch = client.BatchV1Api()
+    job = batch.read_namespaced_job(name, namespace)
+    status = job.status
+    return {
+        "namespace": namespace,
+        "name": name,
+        "succeeded": status.succeeded,
+        "failed": status.failed,
+        "active": status.active,
+        "completionTime": str(status.completion_time) if status.completion_time else None,
+        "conditions": _condition_summary(status.conditions, message_limit=200),
+    }
+
+
 def restart_deployment(namespace: str, name: str) -> str:
     client = _client()
     apps = client.AppsV1Api()
