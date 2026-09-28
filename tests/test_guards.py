@@ -188,6 +188,7 @@ class GrokNormalizeTests(unittest.TestCase):
             investigate = grok.investigate_prompt()
             self.assertIn("github.com/example/gitops", system)
             self.assertIn("lab", investigate)
+            self.assertIn("Argo CD Application sync or health", investigate)
             self.assertNotIn("davtur", system)
             self.assertNotIn("drtsoft", investigate)
         finally:
@@ -224,6 +225,114 @@ class InvestigateToolTests(unittest.TestCase):
 
         out = json.loads(run_tool("list_workloads", {"namespace": "Not Valid"}))
         self.assertIn("error", out)
+
+
+class InvestigateLimitFindingsTests(unittest.TestCase):
+    def test_finalize_prefers_writeup(self):
+        from app.grok import TOOL_ROUND_LIMIT_MSG, finalize_limit_findings
+
+        out = finalize_limit_findings("Pods crashing in ns-x", partial="ignored")
+        self.assertEqual(out, "Pods crashing in ns-x")
+        self.assertNotIn(TOOL_ROUND_LIMIT_MSG, out)
+
+    def test_finalize_appends_limit_when_writeup_empty(self):
+        from app.grok import TOOL_ROUND_LIMIT_MSG, finalize_limit_findings
+
+        out = finalize_limit_findings("", partial="Saw CrashLoopBackOff on web-0")
+        self.assertIn("Saw CrashLoopBackOff on web-0", out)
+        self.assertTrue(out.endswith(TOOL_ROUND_LIMIT_MSG))
+
+    def test_finalize_limit_only_when_no_evidence(self):
+        from app.grok import TOOL_ROUND_LIMIT_MSG, finalize_limit_findings
+
+        self.assertEqual(finalize_limit_findings("  ", partial=""), TOOL_ROUND_LIMIT_MSG)
+
+    def test_investigate_forces_no_tool_writeup_at_limit(self):
+        from unittest import mock
+        from app import config, grok
+
+        previous = config.MAX_INVESTIGATE_ROUNDS
+        config.MAX_INVESTIGATE_ROUNDS = 2
+        tool_rounds = {"n": 0}
+
+        def fake_chat(client, spec, messages, tools=None):
+            if tools:
+                tool_rounds["n"] += 1
+                return {
+                    "role": "assistant",
+                    "content": f"checking round {tool_rounds['n']}",
+                    "tool_calls": [
+                        {
+                            "id": f"call_{tool_rounds['n']}",
+                            "type": "function",
+                            "function": {
+                                "name": "list_workloads",
+                                "arguments": '{"namespace":"default"}',
+                            },
+                        }
+                    ],
+                }
+            return {
+                "role": "assistant",
+                "content": "Findings: default workloads listed; no crash evidence.",
+            }
+
+        try:
+            with mock.patch.object(grok, "_chat", side_effect=fake_chat), mock.patch(
+                "app.investigate.run_tool", return_value='{"items":[]}'
+            ):
+                findings = grok._investigate(
+                    client=object(),
+                    spec=mock.Mock(label="TestModel", model="m", api_url="http://x", extra_body={}),
+                    payload={"alerts": []},
+                    cluster_context="",
+                )
+            self.assertIn("Findings: default workloads listed", findings)
+            self.assertNotIn(grok.TOOL_ROUND_LIMIT_MSG, findings)
+            self.assertEqual(tool_rounds["n"], 2)
+        finally:
+            config.MAX_INVESTIGATE_ROUNDS = previous
+
+    def test_investigate_keeps_limit_msg_if_forced_writeup_fails(self):
+        from unittest import mock
+        from app import config, grok
+
+        previous = config.MAX_INVESTIGATE_ROUNDS
+        config.MAX_INVESTIGATE_ROUNDS = 1
+
+        def fake_chat(client, spec, messages, tools=None):
+            if tools:
+                return {
+                    "role": "assistant",
+                    "content": "partial note from tools",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "list_events",
+                                "arguments": '{"namespace":"default"}',
+                            },
+                        }
+                    ],
+                }
+            raise RuntimeError("model down")
+
+        try:
+            with mock.patch.object(grok, "_chat", side_effect=fake_chat), mock.patch(
+                "app.investigate.run_tool", return_value='{"items":[]}'
+            ):
+                findings = grok._investigate(
+                    client=object(),
+                    spec=mock.Mock(label="TestModel", model="m", api_url="http://x", extra_body={}),
+                    payload={"alerts": []},
+                    cluster_context="",
+                )
+            self.assertIn("partial note from tools", findings)
+            self.assertIn(grok.TOOL_ROUND_LIMIT_MSG, findings)
+        finally:
+            config.MAX_INVESTIGATE_ROUNDS = previous
+
 
 
 if __name__ == "__main__":

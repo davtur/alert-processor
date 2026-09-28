@@ -23,6 +23,7 @@ def investigate_prompt() -> str:
 You have READ-ONLY cluster tools. Use them to find the actual root cause before concluding.
 Do not suggest executing mutations via tools — there are none. Do not invent resource names.
 Typical sequence: list_workloads in the alert namespace, list_events, get_pod / get_logs for crashlooping containers, get_workload for the owner, list_nodes if this looks like GPU/node pressure.
+If the alert is about Argo CD Application sync or health and these tools cannot show Application status, say so after at most a couple of checks and stop calling tools.
 When you have enough evidence, stop calling tools and write a concise findings report covering:
 - what is broken
 - evidence (pod names, log lines, events)
@@ -285,6 +286,30 @@ def _chat(
     raise last_error or RuntimeError(f"{spec.label} chat failed")
 
 
+TOOL_ROUND_LIMIT_MSG = "Investigation hit the tool-round limit without a final write-up."
+
+
+def force_findings_user_message() -> str:
+    return (
+        "Stop calling tools. You have no more investigation tool rounds. "
+        "Write the findings report from the conversation so far covering: "
+        "what is broken; evidence (pod names, log lines, events); likely root cause; "
+        "whether a restart would only mask it; and a permanent GitOps fix path if any. "
+        "If tools could not see Argo CD Application sync/health status, say so explicitly."
+    )
+
+
+def finalize_limit_findings(writeup: str, partial: str = "") -> str:
+    """Prefer a forced no-tool write-up; otherwise keep partial evidence plus the limit note."""
+    text = (writeup or "").strip()
+    if text:
+        return text
+    base = (partial or "").strip()
+    if base:
+        return f"{base}\n\n{TOOL_ROUND_LIMIT_MSG}"
+    return TOOL_ROUND_LIMIT_MSG
+
+
 def _investigate(
     client: httpx.Client,
     spec: catalog.ModelSpec,
@@ -304,6 +329,7 @@ def _investigate(
         },
     ]
     findings = ""
+    partial_bits: list[str] = []
     for round_n in range(config.MAX_INVESTIGATE_ROUNDS):
         message = _chat(client, spec, messages, TOOLS)
         calls = tool_calls_from_message(message)
@@ -311,6 +337,9 @@ def _investigate(
             findings = _message_text(message)
             log.info("Investigation finished after %s rounds (%s chars)", round_n + 1, len(findings))
             break
+        snippet = _message_text(message)
+        if snippet:
+            partial_bits.append(snippet)
         messages.append(_sanitize_assistant(message))
         for call in calls:
             fn = call.get("function") or {}
@@ -330,7 +359,23 @@ def _investigate(
                 }
             )
     else:
-        findings = "Investigation hit the tool-round limit without a final write-up."
+        log.warning(
+            "Investigation hit tool-round limit after %s rounds; forcing write-up",
+            config.MAX_INVESTIGATE_ROUNDS,
+        )
+        messages.append({"role": "user", "content": force_findings_user_message()})
+        writeup = ""
+        try:
+            message = _chat(client, spec, messages)
+            writeup = _message_text(message)
+        except Exception as exc:
+            log.warning("Forced investigation write-up failed: %s", exc)
+        findings = finalize_limit_findings(writeup, "\n\n".join(partial_bits))
+        log.info(
+            "Investigation limit write-up (%s chars, partial=%s)",
+            len(findings),
+            bool(partial_bits),
+        )
     return findings or "No investigation findings."
 
 
