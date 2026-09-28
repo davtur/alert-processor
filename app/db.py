@@ -299,6 +299,53 @@ def upsert_incident(
             return _row_to_dict(row) or {}
 
 
+
+def interrupt_orphaned_investigations() -> int:
+    """Clear investigation_status=running left by daemon threads killed on restart."""
+    cleared = 0
+    with _write_lock():
+        with _conn() as conn:
+            rows = conn.execute(_q("SELECT id, recommendation_json FROM incidents")).fetchall()
+            now = _now()
+            for row in rows:
+                raw = row["recommendation_json"] if isinstance(row, Mapping) else row[1]
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if str(rec.get("investigation_status") or "") != "running":
+                    continue
+                model = str(rec.get("model_label") or rec.get("model_id") or "model")
+                rec.update(
+                    {
+                        "summary": (
+                            f"{model} investigation was interrupted because alert-processor "
+                            "restarted. Use Re-analyze to retry."
+                        ),
+                        "root_cause": "Process restart while investigation was running",
+                        "how_to_resolve": ["Click Re-analyze in the inbox to run again."],
+                        "action_type": "acknowledge",
+                        "investigation_status": "done",
+                        "investigation": str(rec.get("investigation") or ""),
+                    }
+                )
+                incident_id = row["id"] if isinstance(row, Mapping) else row[0]
+                conn.execute(
+                    _q(
+                        """
+                        UPDATE incidents
+                        SET recommendation_json = %s, updated_at = %s
+                        WHERE id = %s
+                        """
+                    ),
+                    (json.dumps(rec), now, incident_id),
+                )
+                cleared += 1
+    return cleared
+
+
 def save_recommendation(incident_id: int, recommendation: dict[str, Any]) -> None:
     with _write_lock():
         with _conn() as conn:

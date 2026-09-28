@@ -39,6 +39,12 @@ async def lifespan(_app: FastAPI):
         log.info("WEBHOOK_TOKEN is unset; restrict /api/v1/webhook to the cluster network")
     if not config.GITHUB_REPO:
         log.info("GITHUB_REPO is unset; GitOps pull requests are disabled")
+    orphaned = db.interrupt_orphaned_investigations()
+    if orphaned:
+        log.warning(
+            "cleared %s orphaned investigation(s) left running across restart",
+            orphaned,
+        )
     log.info("alert-processor ready, db=%s", db.describe())
     yield
 
@@ -132,7 +138,11 @@ def _should_analyze(incident: dict[str, Any]) -> bool:
     if not rec:
         return True
     status = str(rec.get("investigation_status") or "")
-    age = _age_seconds(incident.get("updated_at"))
+    # Prefer investigation_started_at so Alertmanager re-fires (which bump
+    # updated_at) cannot keep a dead "running" placeholder forever.
+    age = _age_seconds(str(rec.get("investigation_started_at") or "") or None)
+    if age is None:
+        age = _age_seconds(incident.get("updated_at"))
     if status == "running":
         if age is None or age > config.STALE_RUNNING_SECONDS:
             return True
@@ -156,6 +166,7 @@ def _investigating_placeholder(**extra: Any) -> dict[str, Any]:
         "how_to_resolve": [],
         "action_type": "acknowledge",
         "investigation_status": "running",
+        "investigation_started_at": datetime.now(timezone.utc).isoformat(),
         "model_id": model_id,
         "model_label": label if model_id else "",
     }

@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -119,6 +120,7 @@ def _normalize(rec: dict[str, Any]) -> dict[str, Any]:
         },
         "investigation": str(rec.get("investigation") or ""),
         "investigation_status": str(rec.get("investigation_status") or "done"),
+        "investigation_started_at": str(rec.get("investigation_started_at") or ""),
         "pr_url": str(rec.get("pr_url") or ""),
         "pr_error": str(rec.get("pr_error") or ""),
         "model_id": str(rec.get("model_id") or ""),
@@ -225,6 +227,13 @@ def _sanitize_assistant(message: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _api_host(url: str) -> str:
+    try:
+        return urlparse(url).netloc or url
+    except Exception:
+        return "?"
+
+
 def _chat(
     client: httpx.Client,
     spec: catalog.ModelSpec,
@@ -238,10 +247,28 @@ def _chat(
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
+    host = _api_host(spec.api_url)
+    tool_n = len(tools or [])
     last_error: Exception | None = None
     for attempt in range(1, 4):
         try:
+            log.info(
+                "%s chat POST host=%s attempt=%s/3 tools=%s messages=%s",
+                spec.label,
+                host,
+                attempt,
+                tool_n,
+                len(messages),
+            )
+            started = time.monotonic()
             response = client.post(spec.api_url, headers=_headers(spec), json=body)
+            log.info(
+                "%s chat response status=%s elapsed=%.1fs host=%s",
+                spec.label,
+                response.status_code,
+                time.monotonic() - started,
+                host,
+            )
             if response.status_code >= 400:
                 detail = (response.text or "")[:1500]
                 log.error("%s HTTP %s: %s", spec.label, response.status_code, detail)
