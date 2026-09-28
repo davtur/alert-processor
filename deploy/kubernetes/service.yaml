@@ -1,0 +1,16 @@
+# ClusterIP only. Do not expose port 8080 on an Ingress. The webhook shares
+# this port with the inbox; put the inbox behind authentication separately.
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-processor
+  namespace: alert-processor
+  labels:
+    app.kubernetes.io/name: alert-processor
+spec:
+  selector:
+    app.kubernetes.io/name: alert-processor
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

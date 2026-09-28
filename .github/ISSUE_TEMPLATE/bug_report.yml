@@ -1,0 +1,35 @@
+name: Bug report
+description: Something failed or behaved unsafely
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Include the alert name, action type, and the log line. Do not paste API keys, tokens, or kubeconfigs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Git revision or image tag
+      placeholder: main
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Where it runs
+      options:
+        - Local Python
+        - Kubernetes
+        - OpenShift
+    validations:
+      required: true

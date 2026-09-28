@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import threading
 from datetime import datetime, timezone
@@ -28,6 +29,14 @@ _analyzing: set[int] = set()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init()
+    if config.SIGNING_SECRET == config.DEV_SIGNING_SECRET:
+        log.warning(
+            "SIGNING_SECRET is the development default; set a unique secret before exposing this service"
+        )
+    if not config.WEBHOOK_TOKEN:
+        log.info("WEBHOOK_TOKEN is unset; restrict /api/v1/webhook to the cluster network")
+    if not config.GITHUB_REPO:
+        log.info("GITHUB_REPO is unset; GitOps pull requests are disabled")
     log.info("alert-processor ready, db=%s", db.describe())
     yield
 
@@ -298,8 +307,19 @@ def readyz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _webhook_authorized(request: Request) -> bool:
+    token = config.WEBHOOK_TOKEN
+    if not token:
+        return True
+    header = request.headers.get("Authorization", "")
+    presented = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
+    return bool(presented) and hmac.compare_digest(presented.encode(), token.encode())
+
+
 @app.post("/api/v1/webhook")
-async def webhook(body: AlertmanagerWebhook) -> dict[str, Any]:
+async def webhook(request: Request, body: AlertmanagerWebhook) -> dict[str, Any]:
+    if not _webhook_authorized(request):
+        raise HTTPException(status_code=401, detail="invalid webhook token")
     payload = body.model_dump()
     return _process_webhook(payload)
 
@@ -308,8 +328,6 @@ async def webhook(body: AlertmanagerWebhook) -> dict[str, Any]:
 def login(body: LoginBody) -> JSONResponse:
     if not config.AUTH_PASSWORD:
         raise HTTPException(status_code=500, detail="AUTH_PASSWORD is not configured")
-    import hmac
-
     if not hmac.compare_digest(body.password, config.AUTH_PASSWORD):
         raise HTTPException(status_code=401, detail="invalid password")
     response = JSONResponse({"status": "ok"})
@@ -343,6 +361,7 @@ def session(request: Request) -> dict[str, Any]:
         "user": user or None,
         "auth": "openshift" if user else ("password" if authenticated else None),
         "logout_url": config.OAUTH_LOGOUT_URL if user else "",
+        "cluster_name": config.CLUSTER_NAME,
     }
 
 

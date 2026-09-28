@@ -1,4 +1,4 @@
-"""Gmail SMTP notifications with signed approval links."""
+"""SMTP notifications with signed approval links."""
 
 from __future__ import annotations
 
@@ -56,16 +56,22 @@ def _html(incident: dict[str, Any], rec: dict[str, Any], approve_url: str, rejec
       <a href="{approve_url}" style="display:inline-block;background:#ee0000;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;margin-right:8px;">Review &amp; approve</a>
       <a href="{reject_url}" style="display:inline-block;background:#3c3c3c;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;">Reject</a>
     </p>
-    <p style="margin-top:20px;"><a href="{inbox}" style="color:#b4b4b4;">Open inbox on iPhone</a></p>
+    <p style="margin-top:20px;"><a href="{inbox}" style="color:#b4b4b4;">Open inbox</a></p>
   </div>
 </body>
 </html>
 """
 
 
+def _mail_ready() -> bool:
+    if config.SMTP_PASSWORD and config.SMTP_USER and config.MAIL_TO:
+        return True
+    log.warning("SMTP is incomplete (need SMTP_USER, SMTP_PASSWORD, and MAIL_TO); skipping email")
+    return False
+
+
 def send_recommendation(incident: dict[str, Any], rec: dict[str, Any]) -> bool:
-    if not config.SMTP_PASSWORD:
-        log.warning("SMTP_PASSWORD is not set; skipping email")
+    if not _mail_ready():
         return False
     incident_id = int(incident["id"])
     approve = f"{config.PUBLIC_BASE_URL}/t/{tokens.make_action_token(incident_id, 'approve')}"
@@ -104,7 +110,7 @@ def send_recommendation(incident: dict[str, Any], rec: dict[str, Any]) -> bool:
 
 
 def send_action_result(incident: dict[str, Any], title: str, body: str) -> None:
-    if not config.SMTP_PASSWORD:
+    if not _mail_ready():
         return
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = title

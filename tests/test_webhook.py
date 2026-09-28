@@ -47,23 +47,23 @@ class WebhookTests(unittest.TestCase):
 
     def test_openshift_header_authenticates(self):
         client = TestClient(app)
-        res = client.get("/api/v1/session", headers={"X-Forwarded-User": "davtur"})
+        res = client.get("/api/v1/session", headers={"X-Forwarded-User": "dev"})
         data = res.json()
         self.assertTrue(data["authenticated"])
-        self.assertEqual(data["user"], "davtur")
+        self.assertEqual(data["user"], "dev")
         self.assertEqual(data["auth"], "openshift")
-        inbox = client.get("/api/v1/incidents", headers={"X-Forwarded-User": "davtur"})
+        inbox = client.get("/api/v1/incidents", headers={"X-Forwarded-User": "dev"})
         self.assertEqual(inbox.status_code, 200)
 
     def test_openshift_email_header_authenticates(self):
         client = TestClient(app)
         res = client.get(
             "/api/v1/session",
-            headers={"X-Forwarded-User": "", "X-Forwarded-Email": "david@manlyit.com.au"},
+            headers={"X-Forwarded-User": "", "X-Forwarded-Email": "operator@example.com"},
         )
         data = res.json()
         self.assertTrue(data["authenticated"])
-        self.assertEqual(data["user"], "david@manlyit.com.au")
+        self.assertEqual(data["user"], "operator@example.com")
         self.assertEqual(data["auth"], "openshift")
 
     def test_incidents_require_login(self):
@@ -72,7 +72,7 @@ class WebhookTests(unittest.TestCase):
 
     def test_reanalyze_queues_background_job(self):
         client = TestClient(app)
-        headers = {"X-Forwarded-User": "davtur"}
+        headers = {"X-Forwarded-User": "dev"}
         created = client.post(
             "/api/v1/webhook",
             json={
@@ -132,3 +132,28 @@ class WebhookTests(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(second.json()["status"], "deduplicated")
         self.assertEqual(second.json()["id"], first.json()["id"])
+
+    def test_webhook_token_when_configured(self):
+        from app import config
+
+        previous = config.WEBHOOK_TOKEN
+        config.WEBHOOK_TOKEN = "unit-test-webhook"
+        client = TestClient(app)
+        payload = {
+            "status": "firing",
+            "groupKey": "Watchdog-token",
+            "commonLabels": {"alertname": "Watchdog"},
+            "alerts": [{"labels": {"alertname": "Watchdog"}, "status": "firing"}],
+        }
+        try:
+            denied = client.post("/api/v1/webhook", json=payload)
+            self.assertEqual(denied.status_code, 401)
+            allowed = client.post(
+                "/api/v1/webhook",
+                json=payload,
+                headers={"Authorization": "Bearer unit-test-webhook"},
+            )
+            self.assertEqual(allowed.status_code, 200)
+            self.assertEqual(allowed.json()["status"], "skipped")
+        finally:
+            config.WEBHOOK_TOKEN = previous

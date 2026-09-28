@@ -1,4 +1,4 @@
-"""Open a GitHub PR on openshift-delta for a proposed GitOps change."""
+"""Open a GitHub pull request for a proposed GitOps change."""
 
 from __future__ import annotations
 
@@ -29,10 +29,8 @@ def validate_path(path: str) -> str:
     if not path.endswith((".yaml", ".yml", ".md")):
         raise GitOpsError("gitops path must be yaml or markdown")
     if not path.startswith(config.GITOPS_PATH_PREFIXES):
-        raise GitOpsError(
-            "gitops path must be under apps-kustomize/, cluster-kustomize/, "
-            "operator-subscriptions/, apps-argo/, or gitops-oai/"
-        )
+        allowed = ", ".join(config.GITOPS_PATH_PREFIXES) or "(none configured)"
+        raise GitOpsError(f"gitops path must be under {allowed}")
     return path
 
 
@@ -67,7 +65,8 @@ def resolve_path(incident: dict[str, Any], rec: dict[str, Any]) -> str:
     except GitOpsError:
         alert = _BRANCH_SAFE.sub("-", str(incident.get("alertname") or "alert")).strip("-")
         alert = (alert or "alert").lower()[:40]
-        return f"apps-kustomize/alert-processor/proposals/{incident['id']}-{alert}.yaml"
+        fallback = f"{config.GITOPS_PROPOSAL_PREFIX}/{incident['id']}-{alert}.yaml"
+        return validate_path(fallback)
 
 
 def _headers() -> dict[str, str]:
@@ -123,6 +122,9 @@ def create_pr(incident: dict[str, Any], rec: dict[str, Any]) -> str:
     content = yaml_body(str(gitops.get("yaml_or_patch") or ""))
     if not content.strip():
         raise GitOpsError("gitops yaml_or_patch is empty")
+
+    if "/" not in config.GITHUB_REPO:
+        raise GitOpsError("GITHUB_REPO must be set to owner/name")
 
     fingerprint = str(incident.get("fingerprint") or incident["id"])
     branch = _BRANCH_SAFE.sub("-", f"alert/{fingerprint}")[:80]

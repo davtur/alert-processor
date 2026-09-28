@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alert-processor
+  namespace: alert-processor
+  labels:
+    app.kubernetes.io/name: alert-processor
+data:
+  PUBLIC_BASE_URL: https://alert-processor.example.com
+  CLUSTER_NAME: example
+  XAI_MODEL: grok-4-1-fast-non-reasoning
+  GITHUB_REPO: owner/gitops-repo
+  GITOPS_PATH_PREFIXES: apps-kustomize,cluster-kustomize,operator-subscriptions,apps-argo,gitops-oai
+  GITOPS_PROPOSAL_PREFIX: apps-kustomize/alert-processor/proposals
+  SMTP_HOST: smtp.gmail.com
+  SMTP_PORT: "587"
+  SMTP_USER: alerts@example.com
+  MAIL_TO: you@example.com
+  MAIL_FROM: alerts@example.com
+  DATA_DIR: /data

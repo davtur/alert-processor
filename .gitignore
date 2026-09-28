@@ -4,9 +4,12 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .coverage
+htmlcov/
 data/
 *.db
 .env
 .DS_Store
 dist/
 build/
+.idea/
+.vscode/

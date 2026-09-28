@@ -16,24 +16,24 @@ XAI_API_URL = _env("XAI_API_URL", "https://api.x.ai/v1/chat/completions")
 
 SMTP_HOST = _env("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(_env("SMTP_PORT", "587") or "587")
-SMTP_USER = _env("SMTP_USER", "davtur@gmail.com")
+SMTP_USER = _env("SMTP_USER")
 SMTP_PASSWORD = _env("SMTP_PASSWORD")
-MAIL_TO = _env("MAIL_TO", "davtur@gmail.com")
-MAIL_FROM = _env("MAIL_FROM", SMTP_USER or "davtur@gmail.com")
+MAIL_TO = _env("MAIL_TO")
+MAIL_FROM = _env("MAIL_FROM") or SMTP_USER
 
 GITHUB_TOKEN = _env("GITHUB_TOKEN")
-GITHUB_REPO = _env("GITHUB_REPO", "davtur/openshift-delta")
+GITHUB_REPO = _env("GITHUB_REPO")
 GITHUB_API = _env("GITHUB_API", "https://api.github.com")
 
 AUTH_PASSWORD = _env("AUTH_PASSWORD")
 SIGNING_SECRET = _env("SIGNING_SECRET") or AUTH_PASSWORD or "dev-signing-secret"
+DEV_SIGNING_SECRET = "dev-signing-secret"
 
-PUBLIC_BASE_URL = _env("PUBLIC_BASE_URL", "https://alert-processor.apps.delta.drtsoft.com").rstrip("/")
+PUBLIC_BASE_URL = _env("PUBLIC_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 OAUTH_COOKIE_NAME = _env("OAUTH_COOKIE_NAME", "_oauth_proxy_ap")
-OAUTH_LOGOUT_URL = _env(
-    "OAUTH_LOGOUT_URL",
-    "https://oauth-openshift.apps.delta.drtsoft.com/logout?then=https://alert-processor.apps.delta.drtsoft.com",
-)
+OAUTH_LOGOUT_URL = _env("OAUTH_LOGOUT_URL")
+CLUSTER_NAME = _env("CLUSTER_NAME")
+WEBHOOK_TOKEN = _env("WEBHOOK_TOKEN")
 DATA_DIR = Path(_env("DATA_DIR", "/data"))
 DB_PATH = Path(_env("DB_PATH", str(DATA_DIR / "alert-processor.db")))
 DATABASE_URL = _env("DATABASE_URL")
@@ -63,12 +63,22 @@ ALLOWED_ACTION_TYPES = frozenset(
     }
 )
 
-GITOPS_PATH_PREFIXES = (
-    "apps-kustomize/",
-    "cluster-kustomize/",
-    "operator-subscriptions/",
-    "apps-argo/",
-    "gitops-oai/",
+def _prefixes(name: str, default: str) -> tuple[str, ...]:
+    items = []
+    for part in _env(name, default).split(","):
+        item = part.strip().strip("/")
+        if item:
+            items.append(f"{item}/")
+    return tuple(items)
+
+
+GITOPS_PATH_PREFIXES = _prefixes(
+    "GITOPS_PATH_PREFIXES",
+    "apps-kustomize,cluster-kustomize,operator-subscriptions,apps-argo,gitops-oai",
 )
+GITOPS_PROPOSAL_PREFIX = _env(
+    "GITOPS_PROPOSAL_PREFIX",
+    "apps-kustomize/alert-processor/proposals",
+).strip("/")
 
 ALWAYS_DENY_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease"})

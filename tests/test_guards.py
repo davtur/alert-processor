@@ -172,10 +172,44 @@ class GrokNormalizeTests(unittest.TestCase):
         rec = grok._normalize(
             {
                 "action_type": "acknowledge",
-                "pr_url": "https://github.com/davtur/openshift-delta/pull/11",
+                "pr_url": "https://github.com/example/gitops/pull/11",
             }
         )
-        self.assertIn("https://github.com/davtur/openshift-delta/pull/11", grok.approval_effect(rec))
+        self.assertIn("https://github.com/example/gitops/pull/11", grok.approval_effect(rec))
+
+    def test_prompts_follow_repository_config(self):
+        from app import config
+
+        previous = (config.GITHUB_REPO, config.CLUSTER_NAME)
+        config.GITHUB_REPO = "example/gitops"
+        config.CLUSTER_NAME = "lab"
+        try:
+            system = grok.system_prompt()
+            investigate = grok.investigate_prompt()
+            self.assertIn("github.com/example/gitops", system)
+            self.assertIn("lab", investigate)
+            self.assertNotIn("davtur", system)
+            self.assertNotIn("drtsoft", investigate)
+        finally:
+            config.GITHUB_REPO, config.CLUSTER_NAME = previous
+
+    def test_defaults_are_generic(self):
+        from app import config
+
+        watched = {
+            "SMTP_USER": config.SMTP_USER,
+            "MAIL_TO": config.MAIL_TO,
+            "MAIL_FROM": config.MAIL_FROM,
+            "GITHUB_REPO": config.GITHUB_REPO,
+            "PUBLIC_BASE_URL": config.PUBLIC_BASE_URL,
+            "OAUTH_LOGOUT_URL": config.OAUTH_LOGOUT_URL,
+            "CLUSTER_NAME": config.CLUSTER_NAME,
+        }
+        for name, value in watched.items():
+            if os.environ.get(name):
+                continue
+            for marker in ("davtur", "drtsoft", "manlyit"):
+                self.assertNotIn(marker, value, name)
 
 
 class InvestigateToolTests(unittest.TestCase):

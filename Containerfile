@@ -14,4 +14,5 @@ EXPOSE 8080
 
 USER 1001
 
+# Do not trust X-Forwarded-For. Identity headers are read by the app itself.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-proxy-headers"]

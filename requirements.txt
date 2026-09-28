@@ -1,3 +1,4 @@
+# Keep in sync with pyproject.toml dependencies.
 fastapi>=0.116.0
 uvicorn[standard]>=0.35.0
 httpx>=0.28.0

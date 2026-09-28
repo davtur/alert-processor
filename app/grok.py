@@ -14,7 +14,11 @@ from app import config
 
 log = logging.getLogger("alert-processor.grok")
 
-INVESTIGATE_PROMPT = """You are investigating a firing OpenShift 4 alert on the personal GitOps cluster delta.drtsoft.com.
+
+def investigate_prompt() -> str:
+    where = config.CLUSTER_NAME or "this cluster"
+    prefixes = ", ".join(config.GITOPS_PATH_PREFIXES) or "the configured GitOps directories"
+    return f"""You are investigating a firing Kubernetes or OpenShift alert on {where}.
 You have READ-ONLY cluster tools. Use them to find the actual root cause before concluding.
 Do not suggest executing mutations via tools — there are none. Do not invent resource names.
 Typical sequence: list_workloads in the alert namespace, list_events, get_pod / get_logs for crashlooping containers, get_workload for the owner, list_nodes if this looks like GPU/node pressure.
@@ -23,24 +27,37 @@ When you have enough evidence, stop calling tools and write a concise findings r
 - evidence (pod names, log lines, events)
 - likely root cause
 - whether a restart would only mask it
-- what a permanent GitOps fix would look like (file path under apps-kustomize/, cluster-kustomize/, operator-subscriptions/, apps-argo/, or gitops-oai/ if you can name one)
+- what a permanent GitOps fix would look like (file path under {prefixes} if you can name one)
 """
 
-SYSTEM_PROMPT = """You are an OpenShift 4 cluster SRE assistant for a personal GitOps cluster (delta.drtsoft.com).
+
+def system_prompt() -> str:
+    where = config.CLUSTER_NAME or "a Kubernetes or OpenShift cluster"
+    if "/" in config.GITHUB_REPO:
+        git_line = (
+            "All permanent cluster configuration must go through Git and a pull request on "
+            f"github.com/{config.GITHUB_REPO}."
+        )
+    else:
+        git_line = (
+            "All permanent cluster configuration must go through Git. "
+            "GITHUB_REPO is not configured, so a pull request will not be opened."
+        )
+    return f"""You are a Kubernetes and OpenShift SRE assistant for {where}.
 You already ran a read-only investigation. Recommend a PERMANENT corrective action plus an optional short-term executable action.
 
-All permanent cluster configuration must go through Git and a pull request on github.com/davtur/openshift-delta.
+{git_line}
 
 Reply with JSON only (no markdown) using this schema:
-{
+{{
   "summary": "one sentence of what is broken",
   "root_cause": "root cause from the investigation evidence",
   "how_to_resolve": ["permanent step 1", "permanent step 2", "step 3"],
   "risk": "low|medium|high",
   "action_type": "restart_deployment|delete_pod|scale_deployment|gitops_pr|acknowledge",
-  "target": {"namespace": "", "kind": "Deployment|Pod", "name": "", "replicas": null},
-  "gitops": {"path": "", "yaml_or_patch": "", "rationale": ""}
-}
+  "target": {{"namespace": "", "kind": "Deployment|Pod", "name": "", "replicas": null}},
+  "gitops": {{"path": "", "yaml_or_patch": "", "rationale": ""}}
+}}
 
 Rules:
 - Prefer gitops_pr when the lasting fix is config, operator settings, monitors, resources, node selectors, or anything that should survive a restart.
@@ -114,12 +131,13 @@ def approval_effect(rec: dict[str, Any]) -> str:
     name = target.get("name") or ""
     pr_url = str(rec.get("pr_url") or "").strip()
     gitops = rec.get("gitops") or {}
-    path = gitops.get("path") or "a file in openshift-delta"
+    repo = config.GITHUB_REPO or "the configured GitOps repository"
+    path = gitops.get("path") or "a file in the GitOps repository"
     pr_note = (
-        f" GitOps PR already opened: {pr_url}. It will not merge or oc apply."
+        f" GitOps PR already opened: {pr_url}. It will not merge or apply to the cluster."
         if pr_url
         else (
-            f" If the recommendation includes YAML, Approve also opens a GitHub PR on davtur/openshift-delta for {path}."
+            f" If the recommendation includes YAML, Approve also opens a GitHub pull request on {repo} for {path}."
             if gitops.get("yaml_or_patch")
             else ""
         )
@@ -134,9 +152,12 @@ def approval_effect(rec: dict[str, Any]) -> str:
         if pr_url:
             return (
                 f"A GitOps PR is already open: {pr_url}. Approve records that you accepted it. "
-                "It will not merge or oc apply."
+                "It will not merge or apply to the cluster."
             )
-        return f"Approve will open a GitHub PR on davtur/openshift-delta for {path}. It will not merge or oc apply."
+        return (
+            f"Approve will open a GitHub pull request on {repo} for {path}. "
+            "It will not merge or apply to the cluster."
+        )
     if pr_url:
         return (
             "Approve with this action does not change the cluster. "
@@ -215,7 +236,7 @@ def _investigate(client: httpx.Client, payload: dict[str, Any], cluster_context:
     from app.investigate import TOOLS, run_tool, tool_calls_from_message
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": INVESTIGATE_PROMPT},
+        {"role": "system", "content": investigate_prompt()},
         {
             "role": "user",
             "content": json.dumps(
@@ -272,7 +293,7 @@ def recommend(payload: dict[str, Any], cluster_context: str = "") -> dict[str, A
         with httpx.Client(timeout=CHAT_TIMEOUT) as client:
             findings = _investigate(client, payload, cluster_context)
             conclude_messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt()},
                 {
                     "role": "user",
                     "content": json.dumps(

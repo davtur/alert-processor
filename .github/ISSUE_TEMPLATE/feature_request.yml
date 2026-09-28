@@ -1,0 +1,17 @@
+name: Feature request
+description: A change that would help you run this on your cluster
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you cannot do today, and which cluster or GitOps layout that blocks.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true

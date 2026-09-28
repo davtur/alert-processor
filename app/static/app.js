@@ -1,6 +1,7 @@
 const app = document.getElementById("app");
 const logoutBtn = document.getElementById("logoutBtn");
 const userLabel = document.getElementById("userLabel");
+const clusterLabel = document.getElementById("clusterLabel");
 let filter = "firing";
 let selectedId = null;
 let logoutUrl = "";
@@ -43,13 +44,13 @@ function loginForm(error = "") {
   app.innerHTML = `
     <section class="card">
       <h2>Unlock inbox</h2>
-      <p class="muted">On the cluster, OpenShift login is used (Google or htpasswd). This password is only for local access.</p>
+      <p class="muted">Use the shared password for local access. When a reverse proxy sets an identity header, that login is used instead.</p>
       ${error ? `<p class="err">${error}</p>` : ""}
       <form id="loginForm">
         <input type="password" name="password" autocomplete="current-password" placeholder="Password" required/>
         <button class="primary" type="submit">Continue</button>
       </form>
-      <p class="muted">Add this page to your iPhone Home Screen from the Share sheet.</p>
+      <p class="muted">On a phone, add this page to your Home Screen to use it as an app.</p>
     </section>`;
   document.getElementById("loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -221,6 +222,7 @@ function detailView(item) {
 async function render() {
   try {
     const session = await api("/api/v1/session");
+    if (clusterLabel) clusterLabel.textContent = session.cluster_name || "Alerts";
     if (!session.authenticated) {
       logoutBtn.hidden = true;
       userLabel.hidden = true;
